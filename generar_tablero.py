@@ -555,7 +555,7 @@ meses, data = construir_js(datos)
 print(f"   Meses detectados: {', '.join(meses)}")
 print("\n🎨 Generando tablero HTML...")
 html = generar_html(meses, data, ULTIMA_ACTUALIZACION)
-salida = "/Users/nataliaricardez/Library/CloudStorage/Dropbox/Argentilia/Héctor Vazquez/Tablero/index.html"
+salida = "index.html"
 with open(salida, "w", encoding="utf-8") as f:
     f.write(html)
 print(f"\n✅ ¡Listo! Tablero guardado en:\n   {salida}")
