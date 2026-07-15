@@ -228,7 +228,7 @@ def construir_js(datos):
     meses_lista = [m for m in MESES_ES if m in meses_con_data]
 
     data_js = {}
-    for u in ARCHIVOS.keys():
+    for u in HOJAS.keys():
         if u not in datos: continue
         meses = datos[u]['meses']
 
