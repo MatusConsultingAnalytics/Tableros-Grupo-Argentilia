@@ -3,16 +3,26 @@ import os
 import json
 import shutil
 import requests
-from datetime import datetime, date, timedelta
+import calendar
+from datetime import datetime, date, timedelta, timezone
+try:
+    from zoneinfo import ZoneInfo
+    TZ_CDMX = ZoneInfo("America/Mexico_City")
+except Exception:
+    # Respaldo si el entorno no tiene la base tzdata disponible:
+    # México central no usa horario de verano desde 2022 → UTC-6 fijo.
+    TZ_CDMX = timezone(timedelta(hours=-6))
 from io import BytesIO
 
-ULTIMA_ACTUALIZACION = datetime.now().strftime("%d/%m/%Y %I:%M %p")
+_AHORA_CDMX = datetime.now(TZ_CDMX)
+ULTIMA_ACTUALIZACION = _AHORA_CDMX.strftime("%d/%m/%Y %I:%M %p") + " (Hora CDMX)"
 
 # ── Referencias de fecha para parcialidad y bandera de captura ────────
-# HOY: fecha de corte para saber qué semanas/días ya "se ejecutaron".
+# HOY: fecha de corte (en horario de Ciudad de México) para saber qué
+# semanas/días ya "se ejecutaron".
 # FECHA_ESPERADA: último día que YA debería estar cargado (hoy - 1), ya que
 # el día de hoy normalmente aún no cierra operación al momento de correr el script.
-HOY = datetime.now().date()
+HOY = _AHORA_CDMX.date()
 FECHA_ESPERADA = HOY - timedelta(days=1)
 
 # ── Google Sheets (un solo archivo con varias hojas) ──────────────────
@@ -85,7 +95,29 @@ def agrupar_por_semana(dias):
         buckets.append(actual)
     return buckets
 
-def enriquecer_parcialidad(mes_dict):
+def construir_calendario_mes(mes_nombre, dias_existentes):
+    """Construye la lista COMPLETA de días calendario del mes (día 1 al último),
+    sin depender de si la fila existe en el Excel. Si una fecha no tiene fila
+    capturada, se agrega como 'sin dato' (total 0) — así el punto de partida
+    para detectar atrasos es el calendario real, no lo que el archivo trae."""
+    if mes_nombre not in MESES_ES:
+        return dias_existentes
+    mes_num = MESES_ES.index(mes_nombre) + 1
+    anio = int(dias_existentes[0]['fecha'][:4]) if dias_existentes else HOY.year
+    _, ultimo_dia = calendar.monthrange(anio, mes_num)
+    por_fecha = {d['fecha']: d for d in dias_existentes}
+    calendario = []
+    for dia_num in range(1, ultimo_dia + 1):
+        fecha_d = date(anio, mes_num, dia_num)
+        fecha_str = fecha_d.strftime('%Y-%m-%d')
+        if fecha_str in por_fecha:
+            calendario.append(por_fecha[fecha_str])
+        else:
+            calendario.append({'fecha': fecha_str, 'dow': fecha_d.weekday(),
+                                'alimentos': 0.0, 'bebidas': 0.0, 'total': 0.0, 'comensales': 0.0})
+    return calendario
+
+def enriquecer_parcialidad(mes_dict, mes_nombre):
     """Enriquece cada semana del resumen con: días que contiene, días ya
     transcurridos, si es futura/actual, y días sin captura. Con eso calcula:
     - objetivo_acumulado / venta_acumulada respetando la parcialidad (no suma
@@ -93,12 +125,11 @@ def enriquecer_parcialidad(mes_dict):
     - bandera automática de atraso de captura para la semana en revisión.
     - tendencia proyectada para la semana operativa siguiente.
     """
-    buckets = agrupar_por_semana(mes_dict.get('dias', []))
+    buckets = agrupar_por_semana(construir_calendario_mes(mes_nombre, mes_dict.get('dias', [])))
     semanas = mes_dict.get('semanas', [])
 
     objetivo_acum = 0.0
     venta_acum = 0.0
-    semana_revision = None
 
     for i, bucket in enumerate(buckets):
         if i >= len(semanas):
@@ -130,11 +161,27 @@ def enriquecer_parcialidad(mes_dict):
                 objetivo_acum += sem['presupuesto'] * (transcurridos / dias_en_semana)
             else:
                 objetivo_acum += sem['presupuesto']
-            semana_revision = sem
 
     mes_dict['objetivo_acumulado']       = round(objetivo_acum, 2)
     mes_dict['venta_acumulada']          = round(venta_acum, 2)
     mes_dict['pct_cumplimiento_parcial'] = (venta_acum / objetivo_acum * 100) if objetivo_acum > 0 else None
+
+    # ── Semana en revisión para la bandera ───────────────────────────
+    # Es la semana que CONTIENE la fecha esperada (ayer) — no necesariamente
+    # la semana en curso, ya que esta última puede llevar apenas 1 día y no
+    # tener nada qué reportar todavía. Si el atraso viene de una semana ya
+    # cerrada (ej. no se cargó nada desde hace 2 semanas), esa es la que
+    # se debe señalar.
+    semana_revision = None
+    for sem in semanas[:len(buckets)]:
+        fi = datetime.strptime(sem['fecha_inicio'], '%Y-%m-%d').date()
+        ff = datetime.strptime(sem['fecha_fin'], '%Y-%m-%d').date()
+        if fi <= FECHA_ESPERADA <= ff:
+            semana_revision = sem
+            break
+    if semana_revision is None:
+        candidatas = [s for s in semanas[:len(buckets)] if not s.get('es_futura', True)]
+        semana_revision = candidatas[-1] if candidatas else None
 
     if semana_revision is not None:
         faltantes = semana_revision.get('dias_faltantes_captura', 0)
@@ -278,8 +325,8 @@ def leer_excel(sheet_name, nombre):
                 in_resumen = False
         i += 1
 
-    for mes_dict in meses_data.values():
-        enriquecer_parcialidad(mes_dict)
+    for mes_nombre, mes_dict in meses_data.items():
+        enriquecer_parcialidad(mes_dict, mes_nombre)
 
     return meses_data
 
