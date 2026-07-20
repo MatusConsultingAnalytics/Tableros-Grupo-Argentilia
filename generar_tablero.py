@@ -3,10 +3,17 @@ import os
 import json
 import shutil
 import requests
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from io import BytesIO
 
 ULTIMA_ACTUALIZACION = datetime.now().strftime("%d/%m/%Y %I:%M %p")
+
+# ── Referencias de fecha para parcialidad y bandera de captura ────────
+# HOY: fecha de corte para saber qué semanas/días ya "se ejecutaron".
+# FECHA_ESPERADA: último día que YA debería estar cargado (hoy - 1), ya que
+# el día de hoy normalmente aún no cierra operación al momento de correr el script.
+HOY = datetime.now().date()
+FECHA_ESPERADA = HOY - timedelta(days=1)
 
 # ── Google Sheets (un solo archivo con varias hojas) ──────────────────
 SHEETS_ID = "1gbO2DLTDFxN-kWseM7rExwawZ-Q5L8Pm"
@@ -62,6 +69,110 @@ def parse_fecha(v):
         except: pass
     try: return pd.to_datetime(v).date()
     except: return None
+
+def agrupar_por_semana(dias):
+    """Agrupa los días de un mes (ya leídos con fecha real) en semanas operativas
+    Lunes–Domingo. Como cada mes es independiente, la primera y/o última semana
+    puede quedar parcial (menos de 7 días) de forma natural — no se fuerza a 7."""
+    dias_ordenados = sorted(dias, key=lambda d: d['fecha'])
+    buckets, actual = [], []
+    for d in dias_ordenados:
+        if d['dow'] == 0 and actual:  # nuevo lunes → cierra la semana anterior
+            buckets.append(actual)
+            actual = []
+        actual.append(d)
+    if actual:
+        buckets.append(actual)
+    return buckets
+
+def enriquecer_parcialidad(mes_dict):
+    """Enriquece cada semana del resumen con: días que contiene, días ya
+    transcurridos, si es futura/actual, y días sin captura. Con eso calcula:
+    - objetivo_acumulado / venta_acumulada respetando la parcialidad (no suma
+      semanas futuras y prorratea la semana en curso por días transcurridos).
+    - bandera automática de atraso de captura para la semana en revisión.
+    - tendencia proyectada para la semana operativa siguiente.
+    """
+    buckets = agrupar_por_semana(mes_dict.get('dias', []))
+    semanas = mes_dict.get('semanas', [])
+
+    objetivo_acum = 0.0
+    venta_acum = 0.0
+    semana_revision = None
+
+    for i, bucket in enumerate(buckets):
+        if i >= len(semanas):
+            continue
+        sem = semanas[i]
+
+        dias_en_semana = len(bucket)
+        transcurridos = sum(1 for d in bucket if datetime.strptime(d['fecha'], '%Y-%m-%d').date() <= HOY)
+        esperados, faltantes = 0, 0
+        for d in bucket:
+            fecha_d = datetime.strptime(d['fecha'], '%Y-%m-%d').date()
+            if fecha_d <= FECHA_ESPERADA:
+                esperados += 1
+                if d['total'] == 0:
+                    faltantes += 1
+
+        sem['dias_en_semana']         = dias_en_semana
+        sem['dias_transcurridos']     = transcurridos
+        sem['es_futura']              = (transcurridos == 0)
+        sem['es_actual']              = (0 < transcurridos < dias_en_semana)
+        sem['dias_esperados_captura'] = esperados
+        sem['dias_faltantes_captura'] = faltantes
+        sem['fecha_inicio']           = bucket[0]['fecha']
+        sem['fecha_fin']              = bucket[-1]['fecha']
+
+        if not sem['es_futura']:
+            venta_acum += sem['total']
+            if sem['es_actual'] and dias_en_semana:
+                objetivo_acum += sem['presupuesto'] * (transcurridos / dias_en_semana)
+            else:
+                objetivo_acum += sem['presupuesto']
+            semana_revision = sem
+
+    mes_dict['objetivo_acumulado']       = round(objetivo_acum, 2)
+    mes_dict['venta_acumulada']          = round(venta_acum, 2)
+    mes_dict['pct_cumplimiento_parcial'] = (venta_acum / objetivo_acum * 100) if objetivo_acum > 0 else None
+
+    if semana_revision is not None:
+        faltantes = semana_revision.get('dias_faltantes_captura', 0)
+        nivel = 'rojo' if faltantes > 3 else ('amarillo' if faltantes >= 2 else 'ninguna')
+        mes_dict['bandera'] = {
+            'semana': semana_revision['semana'],
+            'fecha_inicio': semana_revision['fecha_inicio'],
+            'fecha_fin': semana_revision['fecha_fin'],
+            'dias_faltantes': faltantes,
+            'dias_esperados': semana_revision.get('dias_esperados_captura', 0),
+            'nivel': nivel,
+        }
+    else:
+        mes_dict['bandera'] = None
+
+    # ── Tendencia a la semana operativa SIGUIENTE (no al mes) ──────────
+    idx_actual = next((i for i, s in enumerate(semanas) if s.get('es_actual')), None)
+    if idx_actual is None:
+        cerradas = [i for i, s in enumerate(semanas) if not s.get('es_futura', True)]
+        idx_actual = cerradas[-1] if cerradas else None
+
+    tendencia = None
+    if idx_actual is not None and idx_actual + 1 < len(semanas):
+        siguiente = semanas[idx_actual + 1]
+        cerradas_prev = [s for s in semanas[:idx_actual + 1]
+                          if not s.get('es_futura') and not s.get('es_actual') and s.get('dias_en_semana')]
+        ultimas2 = cerradas_prev[-2:]
+        if ultimas2 and siguiente.get('presupuesto', 0) > 0:
+            prom_diario = sum(s['total'] / s['dias_en_semana'] for s in ultimas2) / len(ultimas2)
+            dias_siguiente = siguiente.get('dias_en_semana') or 7
+            proyeccion = prom_diario * dias_siguiente
+            tendencia = {
+                'semana': siguiente['semana'],
+                'proyeccion': round(proyeccion, 2),
+                'presupuesto': siguiente['presupuesto'],
+                'pct': round(proyeccion / siguiente['presupuesto'] * 100, 1),
+            }
+    mes_dict['tendencia_semana_siguiente'] = tendencia
 
 def leer_excel(sheet_name, nombre):
     from io import BytesIO
@@ -166,6 +277,10 @@ def leer_excel(sheet_name, nombre):
                 d['cheque'] = {'real': safe_float(row.iloc[1]), 'meta': safe_float(row.iloc[2]), 'dif': safe_float(row.iloc[3])}
                 in_resumen = False
         i += 1
+
+    for mes_dict in meses_data.values():
+        enriquecer_parcialidad(mes_dict)
+
     return meses_data
 
 def leer_staff(sheet_name):
@@ -240,13 +355,26 @@ def construir_js(datos):
             for mes in meses_lista:
                 sems = meses.get(mes, {}).get('semanas', [])
                 r[mes] = [{'s': s['semana'], 'a': round(s['alimentos']), 'b': round(s['bebidas']),
-                            't': round(s['total']), 'p': round(s['presupuesto'])} for s in sems]
+                            't': round(s['total']), 'p': round(s['presupuesto']),
+                            'dias': s.get('dias_en_semana'), 'transc': s.get('dias_transcurridos'),
+                            'actual': s.get('es_actual', False), 'futura': s.get('es_futura', False),
+                            'falt': s.get('dias_faltantes_captura', 0),
+                            'fi': s.get('fecha_inicio'), 'ff': s.get('fecha_fin')} for s in sems]
             return r
         def dias_por_mes():
             r = {}
             for mes in meses_lista:
                 r[mes] = meses.get(mes, {}).get('dias', [])
             return r
+        def presup_parcial():
+            return [meses.get(m, {}).get('objetivo_acumulado', 0) or 0 for m in meses_lista]
+        def venta_parcial():
+            return [meses.get(m, {}).get('venta_acumulada', 0) or 0 for m in meses_lista]
+        def bandera_por_mes():
+            return {m: meses.get(m, {}).get('bandera') for m in meses_lista}
+
+        ultimo_mes = meses_lista[-1] if meses_lista else None
+        tendencia_sem_sig = meses.get(ultimo_mes, {}).get('tendencia_semana_siguiente') if ultimo_mes else None
 
         data_js[u] = {
             'total': s('total'), 'presup': s('presupuesto'),
@@ -256,6 +384,11 @@ def construir_js(datos):
             'semanas': semanas(),
             'dias_por_mes': dias_por_mes(),
             'staff': datos[u]['staff'],
+            # ── Nuevo: parcialidad, bandera y tendencia ──────────────────
+            'presupParcial': presup_parcial(),
+            'ventaParcial': venta_parcial(),
+            'banderaPorMes': bandera_por_mes(),
+            'tendenciaSemSig': tendencia_sem_sig,
         }
     return meses_lista, data_js
 
@@ -289,7 +422,7 @@ def generar_html(meses, data, ultima_actualizacion):
   .nav-btn.active{{color:var(--red);border-bottom-color:var(--red);}}
   .content{{padding:24px 32px;}}
   .section{{display:none;}}.section.active{{display:block;}}
-  .kpi-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;}}
+  .kpi-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px;}}
   .kpi-card{{background:var(--white);border-radius:8px;padding:18px 20px;border-left:4px solid var(--gray-mid);}}
   .kpi-card.positive{{border-left-color:var(--green);}}.kpi-card.negative{{border-left-color:var(--red);}}.kpi-card.neutral{{border-left-color:var(--amber);}}
   .kpi-label{{font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--gray-mid);text-transform:uppercase;margin-bottom:8px;}}
@@ -331,6 +464,13 @@ def generar_html(meses, data, ultima_actualizacion):
   .dia-bar{{flex:1;height:16px;background:var(--gray-light);border-radius:4px;overflow:hidden;}}
   .dia-bar-fill{{height:16px;border-radius:4px;transition:width .4s;}}
   .dia-val{{font-size:11px;color:var(--gray-dark);width:90px;text-align:right;font-weight:600;}}
+  .flag-banner{{padding:10px 16px;border-radius:6px;font-size:12.5px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px;}}
+  .flag-banner.rojo{{background:#FDECEA;color:var(--red);border:1px solid var(--red);}}
+  .flag-banner.amarillo{{background:#FEF3E2;color:var(--amber);border:1px solid var(--amber);}}
+  .flag-banner.ninguna{{background:#E6F4EC;color:var(--green);border:1px solid var(--green);}}
+  .trend-badge{{font-weight:700;}}
+  .trend-badge.up{{color:var(--green);}}.trend-badge.flat{{color:var(--amber);}}.trend-badge.down{{color:var(--red);}}
+  .methodology-note{{font-size:10.5px;color:var(--gray-mid);background:var(--white);border-left:3px solid var(--red);padding:8px 12px;margin-top:10px;line-height:1.5;}}
 </style>
 </head>
 <body>
@@ -367,6 +507,10 @@ def generar_html(meses, data, ultima_actualizacion):
   <div class="table-card">
     <div class="table-title">Ranking por Volumen de Venta</div>
     <table><thead><tr id="th-ranking"></tr></thead><tbody id="tabla-ranking"></tbody></table>
+    <div class="methodology-note">
+      <strong>Objetivo Acumulado</strong>: suma de las semanas operativas ya concluidas + la semana en curso prorrateada por días transcurridos (no se suman semanas que aún no se ejecutan).
+      <strong>Tendencia semana siguiente</strong>: proyección de venta para la próxima semana operativa (Lun–Dom), no para el mes, con base en el promedio diario de las últimas semanas cerradas vs. el objetivo de esa semana.
+    </div>
   </div>
 </div>
 
@@ -387,8 +531,9 @@ def generar_html(meses, data, ultima_actualizacion):
   </div>
   <div class="table-card">
     <div class="table-title">Detalle de Cumplimiento</div>
-    <table><thead><tr><th>Unidad</th><th>Mes</th><th>Venta Real</th><th>Presupuesto</th><th>Diferencia</th><th>% Cumpl.</th><th>Estatus</th></tr></thead>
+    <table><thead><tr><th>Unidad</th><th>Mes</th><th>Venta Real (a la fecha)</th><th>Presupuesto Mensual (completo)</th><th>Objetivo a la fecha (parcial)</th><th>Diferencia</th><th>% Cumpl. (parcial)</th><th>Estatus</th></tr></thead>
     <tbody id="tabla-cumplimiento"></tbody></table>
+    <div class="methodology-note">El <strong>% Cumpl. (parcial)</strong> compara la venta real contra el objetivo <em>a la fecha</em> (semanas ya ejecutadas + prorrateo de la semana en curso), no contra el presupuesto del mes completo. Así, un mes que aún no termina no se ve "en rojo" solo por no haber concluido.</div>
   </div>
 </div>
 
@@ -428,8 +573,10 @@ def generar_html(meses, data, ultima_actualizacion):
   <div class="section-heading">Promedio por Día de Semana <span class="periodo-badge" id="dias-periodo-badge">Acumulado año</span></div>
   <div class="rest-tabs" id="dias-rest-tabs"></div>
   <div class="filter-bar" id="dias-periodo-bar"></div>
+  <div id="dias-flag-banner"></div>
+  <div class="kpi-grid" id="dias-kpis"></div>
   <div class="chart-grid">
-    <div class="chart-card"><div class="chart-title">Promedio de Venta por Día (MXN)</div><div class="chart-wrap"><canvas id="chartDiaVenta"></canvas></div></div>
+    <div class="chart-card"><div class="chart-title">Promedio de Venta por Día (MXN) <span style="font-weight:400;color:#B5B0AD;font-size:10px">— línea: objetivo diario promedio</span></div><div class="chart-wrap"><canvas id="chartDiaVenta"></canvas></div></div>
     <div class="chart-card"><div class="chart-title">Ticket Promedio por Día ($)</div><div class="chart-wrap"><canvas id="chartDiaTicket"></canvas></div></div>
   </div>
   <div class="chart-grid">
@@ -439,6 +586,7 @@ def generar_html(meses, data, ultima_actualizacion):
     <div class="table-title" id="tabla-dias-title">Detalle por Día de Semana</div>
     <table><thead><tr><th>Día</th><th>Prom. Venta</th><th>Prom. Ticket</th><th>Prom. Clientes</th><th>Días registrados</th><th>Índice vs Mejor día</th></tr></thead>
     <tbody id="tabla-dias-body"></tbody></table>
+    <div class="methodology-note">El <strong>objetivo diario</strong> mostrado en la gráfica es el promedio del objetivo semanal entre sus días (no distingue día por día, ya que la meta se define por semana). Los promedios de venta ya excluyen días futuros sin captura, respetando la parcialidad del período seleccionado.</div>
   </div>
   <div class="table-card">
     <div class="table-title">Comparativo por Día — Todas las Unidades</div>
@@ -515,6 +663,7 @@ window.addEventListener('DOMContentLoaded',()=>{{
   buildMixFiltros(); buildMixBar(currentMixMes); buildTicketMes(currentMixMes); fillTablaMix();
   buildDiasRestTabs(); buildPeriodoBar('dias-periodo-bar', ()=>periodoDias, v=>{{periodoDias=v;}}, refrescarDias, 'dias-periodo-badge');
   buildDiasCharts(currentDiaRest, getMesesPeriodo(periodoDias)); fillTablaDias(currentDiaRest, getMesesPeriodo(periodoDias)); fillTablaDiasComp(getMesesPeriodo(periodoDias));
+  renderDiasExtras(currentDiaRest, getMesesPeriodo(periodoDias));
 }});
 
 function showSection(id,btn){{
@@ -570,6 +719,7 @@ function refrescarDias() {{
   buildDiasCharts(currentDiaRest, mp);
   fillTablaDias(currentDiaRest, mp);
   fillTablaDiasComp(mp);
+  renderDiasExtras(currentDiaRest, mp);
 }}
 
 // ── KPI Ranking ────────────────────────────────────────────────────────
@@ -584,22 +734,37 @@ function buildKPIRanking(){{
   }},{{u:'',avg:99999}});
   const mk=DATA['Mikoh']?.total;
   const growth=mk&&mk.length>1?((mk[mk.length-1]-mk[0])/mk[0]*100).toFixed(1):0;
+  const objetivo_grupo=UNIDADES.reduce((a,u)=>a+(DATA[u].presupParcial||[]).reduce((x,y)=>x+y,0),0);
+  const pct_grupo=objetivo_grupo>0?(total_grupo/objetivo_grupo*100):null;
+  const pctColor=pct_grupo===null?'inherit':pct_grupo>=100?'#1A7A4A':pct_grupo>=90?'#D4860A':'#ED2E38';
   document.getElementById('kpi-ranking').innerHTML=`
     <div class="kpi-card positive"><div class="kpi-label">Venta Total Acumulada</div><div class="kpi-value">${{fmt(total_grupo)}}</div><div class="kpi-sub">${{UNIDADES.length}} unidades · ${{MESES.length}} meses</div></div>
+    <div class="kpi-card neutral"><div class="kpi-label">Objetivo Acumulado (parcial)</div><div class="kpi-value">${{fmt(objetivo_grupo)}}</div><div class="kpi-sub">Respeta semanas ya ejecutadas</div></div>
+    <div class="kpi-card ${{pct_grupo===null?'neutral':pct_grupo>=100?'positive':'negative'}}"><div class="kpi-label">% Cumplimiento Grupo</div><div class="kpi-value" style="color:${{pctColor}}">${{pct_grupo!==null?pct_grupo.toFixed(1)+'%':'—'}}</div><div class="kpi-sub">vs. objetivo a la fecha</div></div>
     <div class="kpi-card negative"><div class="kpi-label">#1 por Volumen</div><div class="kpi-value">${{UNIDADES[maxIdx].replace('Argentilia ','A. ')}}</div><div class="kpi-sub">${{fmt(totales[maxIdx])}}</div><div class="kpi-delta up">${{(totales[maxIdx]/total_grupo*100).toFixed(1)}}% del grupo</div></div>
     <div class="kpi-card neutral"><div class="kpi-label">Ticket más bajo</div><div class="kpi-value">${{minTicket.u.replace('Argentilia ','A. ')}}</div><div class="kpi-sub">Prom. $${{minTicket.avg.toFixed(0)}}</div></div>
     <div class="kpi-card positive"><div class="kpi-label">Mayor Crecimiento</div><div class="kpi-value">Mikoh +${{growth}}%</div><div class="kpi-sub">Primer vs último mes</div></div>`;
 }}
 function buildTablaRanking(){{
   const totales=UNIDADES.map(u=>DATA[u].total.reduce((a,b)=>a+b,0));
+  const total_grupo=totales.reduce((a,b)=>a+b,0);
   const sorted=[...UNIDADES].sort((a,b)=>totales[UNIDADES.indexOf(b)]-totales[UNIDADES.indexOf(a)]);
   const medals=['🥇','🥈','🥉','4']; const colors=['#656266','#ED2E38','#656266','#B5B0AD'];
-  document.getElementById('th-ranking').innerHTML='<th>Rank</th><th>Unidad</th>'+MESES.map(m=>`<th>${{m}}</th>`).join('')+'<th>Acumulado</th><th>Tendencia</th>';
+  document.getElementById('th-ranking').innerHTML='<th>Rank</th><th>Unidad</th>'+MESES.map(m=>`<th>${{m}}</th>`).join('')+'<th>Venta Acumulada</th><th>Objetivo Acumulado</th><th>% Cumplimiento</th><th>% Participación</th><th>Tendencia Sem. Siguiente</th>';
   document.getElementById('tabla-ranking').innerHTML=sorted.map((u,i)=>{{
     const tu=totales[UNIDADES.indexOf(u)]; const vals=DATA[u].total;
-    const tend=vals.length>1?(vals[vals.length-1]>vals[0]?'↑ Crecimiento':vals[vals.length-1]<vals[0]?'↓ Caída':'→ Estable'):'—';
-    const tc=tend.startsWith('↑')?'#1A7A4A':tend.startsWith('↓')?'#ED2E38':'#D4860A';
-    return `<tr><td style="font-weight:700;color:#ED2E38">${{medals[i]}}</td><td style="font-weight:700;color:${{colors[i]}}">${{u}}</td>${{vals.map(v=>`<td>${{fmt(v)}}</td>`).join('')}}<td style="font-weight:700">${{fmt(tu)}}</td><td style="color:${{tc}};font-weight:700">${{tend}}</td></tr>`;
+    const objetivoAcum=(DATA[u].presupParcial||[]).reduce((a,b)=>a+b,0);
+    const pctCump=objetivoAcum>0?(tu/objetivoAcum*100):null;
+    const pctColor=pctCump===null?'inherit':pctCump>=100?'#1A7A4A':pctCump>=90?'#D4860A':'#ED2E38';
+    const participacion=total_grupo>0?(tu/total_grupo*100).toFixed(1):'0.0';
+    const ts=DATA[u].tendenciaSemSig;
+    let tendHtml='<span style="color:#B5B0AD">Sin datos suficientes</span>';
+    if(ts){{
+      const cls=ts.pct>=100?'up':ts.pct>=90?'flat':'down';
+      const icon=ts.pct>=100?'▲':ts.pct>=90?'▶':'▼';
+      tendHtml=`<span class="trend-badge ${{cls}}">${{icon}} ${{ts.pct.toFixed(0)}}%</span> <span style="color:#B5B0AD;font-size:10px">(${{ts.semana}})</span>`;
+    }}
+    return `<tr><td style="font-weight:700;color:#ED2E38">${{medals[i]}}</td><td style="font-weight:700;color:${{colors[i]}}">${{u}}</td>${{vals.map(v=>`<td>${{fmt(v)}}</td>`).join('')}}<td style="font-weight:700">${{fmt(tu)}}</td><td>${{fmt(objetivoAcum)}}</td><td style="font-weight:700;color:${{pctColor}}">${{pctCump!==null?pctCump.toFixed(1)+'%':'—'}}</td><td>${{participacion}}%</td><td>${{tendHtml}}</td></tr>`;
   }}).join('');
 }}
 function buildComparativo(){{
@@ -621,7 +786,7 @@ function buildMikohTrend(){{
 function buildCumplimiento(){{
   if(charts.cump)charts.cump.destroy();
   const filtered=currentCumpFilter==='todas'?UNIDADES:[currentCumpFilter];
-  charts.cump=new Chart(document.getElementById('chartCumplimiento').getContext('2d'),{{type:'line',data:{{labels:MESES,datasets:filtered.map(u=>({{"label":u.replace('Argentilia ','A. '),"data":MESES.map((m,i)=>{{const p=DATA[u].presup[i];return p>0?pct(DATA[u].total[i],p):null;}}),"borderColor":COLORES[u],"fill":false,"tension":0.2,"pointRadius":5}})) }},options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{position:'bottom',labels:{{font:{{size:11}}}}}}}},scales:{{y:{{ticks:{{callback:v=>v+'%',font:{{size:11}}}},grid:{{color:'#F2F1F0'}}}}}}}}}});
+  charts.cump=new Chart(document.getElementById('chartCumplimiento').getContext('2d'),{{type:'line',data:{{labels:MESES,datasets:filtered.map(u=>({{"label":u.replace('Argentilia ','A. '),"data":MESES.map((m,i)=>{{const p=(DATA[u].presupParcial||[])[i];return p>0?pct(DATA[u].total[i],p):null;}}),"borderColor":COLORES[u],"fill":false,"tension":0.2,"pointRadius":5}})) }},options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{position:'bottom',labels:{{font:{{size:11}}}}}}}},scales:{{y:{{ticks:{{callback:v=>v+'%',font:{{size:11}}}},grid:{{color:'#F2F1F0'}}}}}}}}}});
 }}
 function setCumpFilter(f,btn){{
   currentCumpFilter=f;
@@ -631,10 +796,11 @@ function setCumpFilter(f,btn){{
 function fillTablaCumplimiento(f){{
   const units=f==='todas'?UNIDADES:[f];
   document.getElementById('tabla-cumplimiento').innerHTML=units.flatMap(u=>MESES.map((m,i)=>{{
-    const r=DATA[u].total[i],p=DATA[u].presup[i];
-    const pc=pct(r,p),dif=p>0?r-p:null;
-    const badge=p===0?'<span class="badge" style="background:#F2F1F0;color:#B5B0AD">Sin meta</span>':pc>=0?'<span class="badge badge-green">✓ Alcanzado</span>':pc>=-10?'<span class="badge badge-amber">⚠ Brecha menor</span>':'<span class="badge badge-red">✗ Brecha crítica</span>';
-    return `<tr><td><strong>${{u}}</strong></td><td>${{m}}</td><td>${{fmt(r)}}</td><td>${{p>0?fmt(p):'—'}}</td><td style="color:${{dif===null?'inherit':dif>=0?'#1A7A4A':'#ED2E38'}}">${{dif!==null?(dif>=0?'+':'')+fmt(dif):'—'}}</td><td style="font-weight:700;color:${{pc===null?'inherit':pc>=0?'#1A7A4A':'#ED2E38'}}">${{pc!==null?(pc>=0?'+':'')+pc.toFixed(1)+'%':'—'}}</td><td>${{badge}}</td></tr>`;
+    const r=DATA[u].total[i],pMensual=DATA[u].presup[i];
+    const pParcial=(DATA[u].presupParcial||[])[i]||0;
+    const pc=pct(r,pParcial),dif=pParcial>0?r-pParcial:null;
+    const badge=pParcial===0?'<span class="badge" style="background:#F2F1F0;color:#B5B0AD">Sin meta</span>':pc>=0?'<span class="badge badge-green">✓ Alcanzado</span>':pc>=-10?'<span class="badge badge-amber">⚠ Brecha menor</span>':'<span class="badge badge-red">✗ Brecha crítica</span>';
+    return `<tr><td><strong>${{u}}</strong></td><td>${{m}}</td><td>${{fmt(r)}}</td><td>${{pMensual>0?fmt(pMensual):'—'}}</td><td>${{pParcial>0?fmt(pParcial):'—'}}</td><td style="color:${{dif===null?'inherit':dif>=0?'#1A7A4A':'#ED2E38'}}">${{dif!==null?(dif>=0?'+':'')+fmt(dif):'—'}}</td><td style="font-weight:700;color:${{pc===null?'inherit':pc>=0?'#1A7A4A':'#ED2E38'}}">${{pc!==null?(pc>=0?'+':'')+pc.toFixed(1)+'%':'—'}}</td><td>${{badge}}</td></tr>`;
   }})).join('');
 }}
 
@@ -666,8 +832,25 @@ function buildDetalleUnidad(u, mesesFiltro){{
   const tend_color=tend_ticket.startsWith('↑')?'#1A7A4A':'#ED2E38';
   const clientes_total=idxList.reduce((s,i)=>s+(d.clientes[i]||0),0);
   const venta_total=idxList.reduce((s,i)=>s+(d.total[i]||0),0);
+  const objetivo_total=idxList.reduce((s,i)=>s+((d.presupParcial||[])[i]||0),0);
+  const pctCump=objetivo_total>0?(venta_total/objetivo_total*100):null;
+  let evalBadge='<span class="badge" style="background:#F2F1F0;color:#B5B0AD">Sin meta</span>';
+  if(pctCump!==null){{
+    evalBadge=pctCump>=100?'<span class="badge badge-green">✓ Cumplido</span>':pctCump>=90?'<span class="badge badge-amber">⚠ En riesgo</span>':'<span class="badge badge-red">✗ No cumplido</span>';
+  }}
+  const ts=d.tendenciaSemSig;
+  let tendHtml='—', tendSub='Sin datos suficientes';
+  if(ts){{
+    const cls=ts.pct>=100?'up':ts.pct>=90?'flat':'down';
+    const icon=ts.pct>=100?'▲':ts.pct>=90?'▶':'▼';
+    tendHtml=`<span class="trend-badge ${{cls}}">${{icon}} ${{ts.pct.toFixed(0)}}%</span>`;
+    tendSub=`Proyección ${{ts.semana}}`;
+  }}
   const kpis=`<div class="kpi-grid">
     <div class="kpi-card positive"><div class="kpi-label">Venta del Período</div><div class="kpi-value">${{fmt(venta_total)}}</div><div class="kpi-sub">${{mesesFiltro.join(' · ')}}</div></div>
+    <div class="kpi-card neutral"><div class="kpi-label">Objetivo Acumulado</div><div class="kpi-value">${{fmt(objetivo_total)}}</div><div class="kpi-sub">Respeta semanas ya ejecutadas</div></div>
+    <div class="kpi-card ${{pctCump===null?'neutral':pctCump>=100?'positive':'negative'}}"><div class="kpi-label">% Cumplimiento</div><div class="kpi-value">${{pctCump!==null?pctCump.toFixed(1)+'%':'—'}}</div><div class="kpi-sub">${{evalBadge}}</div></div>
+    <div class="kpi-card neutral"><div class="kpi-label">Tendencia Sem. Siguiente</div><div class="kpi-value">${{tendHtml}}</div><div class="kpi-sub">${{tendSub}}</div></div>
     <div class="kpi-card positive"><div class="kpi-label">Mejor Mes</div><div class="kpi-value">${{mejor_idx>=0?MESES[mejor_idx]:'—'}}</div><div class="kpi-sub">${{mejor_idx>=0?fmt(d.total[mejor_idx]):'—'}}</div></div>
     <div class="kpi-card neutral"><div class="kpi-label">Ticket Promedio</div><div class="kpi-value" style="color:${{tend_color}}">${{tend_ticket}}</div><div class="kpi-sub">Prom. $${{avg_ticket.toFixed(0)}}</div></div>
     <div class="kpi-card positive"><div class="kpi-label">Comensales</div><div class="kpi-value">${{clientes_total.toLocaleString('es-MX')}}</div><div class="kpi-sub">En el período</div></div>
@@ -679,7 +862,16 @@ function buildDetalleUnidad(u, mesesFiltro){{
     const ali=idxList.map(i=>d.alimentos[i]||0);
     const beb=idxList.map(i=>d.bebidas[i]||0);
     const pre=idxList.map(i=>d.presup[i]||null);
-    charts.ab=new Chart(document.getElementById('chartAB').getContext('2d'),{{type:'bar',data:{{labels,datasets:[{{label:'Alimentos',data:ali,backgroundColor:'#656266',stack:'a'}},{{label:'Bebidas',data:beb,backgroundColor:'#ED2E38',stack:'a'}},{{label:'Presupuesto',data:pre,backgroundColor:'rgba(0,0,0,0)',borderColor:'#B5B0AD',borderWidth:2,type:'line',pointRadius:4}}]}},options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{position:'bottom',labels:{{font:{{size:11}}}}}}}},scales:{{y:{{stacked:true,ticks:{{callback:v=>'$'+(v/1000000).toFixed(1)+'M',font:{{size:11}}}}}},x:{{stacked:true}}}}}}}});
+    const pctAli=idxList.map(i=>{{const t=(d.alimentos[i]||0)+(d.bebidas[i]||0); return t?+((d.alimentos[i]/t)*100).toFixed(1):null;}});
+    charts.ab=new Chart(document.getElementById('chartAB').getContext('2d'),{{type:'bar',data:{{labels,datasets:[
+      {{label:'Alimentos',data:ali,backgroundColor:'#656266',stack:'a'}},
+      {{label:'Bebidas',data:beb,backgroundColor:'#ED2E38',stack:'a'}},
+      {{label:'Presupuesto',data:pre,backgroundColor:'rgba(0,0,0,0)',borderColor:'#B5B0AD',borderWidth:2,type:'line',pointRadius:4}},
+      {{label:'% Alimentos (mezcla)',data:pctAli,type:'line',yAxisID:'y1',borderColor:'#1A7A4A',backgroundColor:'#1A7A4A',borderDash:[3,3],tension:.25,pointRadius:3}}
+    ]}},options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{position:'bottom',labels:{{font:{{size:11}}}}}}}},scales:{{
+      y:{{stacked:true,ticks:{{callback:v=>'$'+(v/1000000).toFixed(1)+'M',font:{{size:11}}}}}},
+      y1:{{beginAtZero:true,max:100,position:'right',grid:{{drawOnChartArea:false}},ticks:{{callback:v=>v+'%',font:{{size:11}}}}}},
+      x:{{stacked:true}}}}}}}});
   }},50);
 }}
 function fillTablaSemana(u, mesesFiltro){{
@@ -749,7 +941,45 @@ function selectDiaRest(u,btn){{
   document.querySelectorAll('#dias .rest-tab').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   const mp=getMesesPeriodo(periodoDias);
-  buildDiasCharts(u,mp); fillTablaDias(u,mp);
+  buildDiasCharts(u,mp); fillTablaDias(u,mp); renderDiasExtras(u,mp);
+}}
+
+// ── Bandera automática de captura + KPIs de objetivo/acumulado ─────────
+function objetivoDiarioPromedio(u, mesesFiltro){{
+  let ps=[];
+  mesesFiltro.forEach(m=>{{
+    (((DATA[u].semanas||{{}})[m])||[]).forEach(s=>{{
+      if(!s.futura && s.dias) ps.push(s.p/s.dias);
+    }});
+  }});
+  return ps.length? ps.reduce((a,b)=>a+b,0)/ps.length : 0;
+}}
+function renderDiasExtras(u, mesesFiltro){{
+  // KPIs del período (respetan la parcialidad, igual que Ranking/Cumplimiento)
+  const idxList=mesesFiltro.map(m=>MESES.indexOf(m)).filter(i=>i>=0);
+  const venta=idxList.reduce((s,i)=>s+(DATA[u].total[i]||0),0);
+  const objetivo=idxList.reduce((s,i)=>s+((DATA[u].presupParcial||[])[i]||0),0);
+  const pc=objetivo>0?(venta/objetivo*100):null;
+  document.getElementById('dias-kpis').innerHTML=`
+    <div class="kpi-card positive"><div class="kpi-label">Venta Acumulada del Período</div><div class="kpi-value">${{fmt(venta)}}</div></div>
+    <div class="kpi-card neutral"><div class="kpi-label">Objetivo Acumulado (parcial)</div><div class="kpi-value">${{fmt(objetivo)}}</div></div>
+    <div class="kpi-card ${{pc===null?'neutral':pc>=100?'positive':'negative'}}"><div class="kpi-label">% Cumplimiento</div><div class="kpi-value">${{pc!==null?pc.toFixed(1)+'%':'—'}}</div></div>`;
+
+  // Bandera: se evalúa sobre el último mes del período seleccionado que tenga bandera calculada
+  const banner=document.getElementById('dias-flag-banner');
+  let mesConBandera=null, band=null;
+  for(let i=mesesFiltro.length-1;i>=0;i--){{
+    const b=(DATA[u].banderaPorMes||{{}})[mesesFiltro[i]];
+    if(b){{ mesConBandera=mesesFiltro[i]; band=b; break; }}
+  }}
+  if(!band){{ banner.innerHTML=''; return; }}
+  if(band.nivel==='rojo'){{
+    banner.innerHTML=`<div class="flag-banner rojo">🔴 Sin información disponible para análisis — ${{band.semana}} (${{band.fecha_inicio}} a ${{band.fecha_fin}}): ${{band.dias_faltantes}} días sin captura.</div>`;
+  }} else if(band.nivel==='amarillo'){{
+    banner.innerHTML=`<div class="flag-banner amarillo">🟡 Captura incompleta — ${{band.semana}} (${{band.fecha_inicio}} a ${{band.fecha_fin}}): ${{band.dias_faltantes}} días sin captura. El análisis debe tomarse con reserva.</div>`;
+  }} else {{
+    banner.innerHTML=`<div class="flag-banner ninguna">🟢 Información al corriente — captura completa hasta el día anterior a la actualización.</div>`;
+  }}
 }}
 function buildDiasCharts(u, mesesFiltro){{
   const ad=calcAnalisisdDia(u, mesesFiltro);
@@ -760,11 +990,16 @@ function buildDiasCharts(u, mesesFiltro){{
   const color=COLORES[u];
   const maxV=Math.max(...ventas), maxT=Math.max(...tickets), maxC=Math.max(...clientes);
 
+  const objDiario=objetivoDiarioPromedio(u, mesesFiltro);
+
   if(charts.diaVenta)charts.diaVenta.destroy();
   charts.diaVenta=new Chart(document.getElementById('chartDiaVenta').getContext('2d'),{{
     type:'bar',
-    data:{{labels,datasets:[{{label:'Prom. Venta',data:ventas,backgroundColor:ventas.map(v=>v===maxV?'#ED2E38':color+'88')}}]}},
-    options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{display:false}}}},scales:{{y:{{ticks:{{callback:v=>'$'+(v/1000).toFixed(0)+'K',font:{{size:11}}}},grid:{{color:'#F2F1F0'}}}}}}}}
+    data:{{labels,datasets:[
+      {{label:'Prom. Venta',data:ventas,backgroundColor:ventas.map(v=>v===maxV?'#ED2E38':color+'88')}},
+      {{label:'Objetivo diario (prom.)',data:labels.map(()=>objDiario||null),type:'line',borderColor:'#B5B0AD',borderDash:[5,3],pointRadius:0,fill:false}}
+    ]}},
+    options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{position:'bottom',labels:{{font:{{size:11}}}}}}}},scales:{{y:{{ticks:{{callback:v=>'$'+(v/1000).toFixed(0)+'K',font:{{size:11}}}},grid:{{color:'#F2F1F0'}}}}}}}}
   }});
   if(charts.diaTicket)charts.diaTicket.destroy();
   charts.diaTicket=new Chart(document.getElementById('chartDiaTicket').getContext('2d'),{{
