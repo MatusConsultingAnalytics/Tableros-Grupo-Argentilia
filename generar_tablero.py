@@ -442,6 +442,7 @@ def construir_js(datos):
 def generar_html(meses, data, ultima_actualizacion):
     meses_json = json.dumps(meses, ensure_ascii=False)
     data_json  = json.dumps(data,  ensure_ascii=False)
+    mes_actual_json = json.dumps(MESES_ES[HOY.month - 1], ensure_ascii=False)
 
     html = f"""<!DOCTYPE html>
 <html lang="es">
@@ -462,13 +463,23 @@ def generar_html(meses, data, ultima_actualizacion):
   .header-title{{color:var(--white);font-size:20px;font-weight:700;}}
   .header-sub{{color:var(--gray-mid);font-size:12px;margin-top:2px;}}
   .header-badge{{background:rgba(237,46,56,0.15);border:1px solid var(--red);color:var(--red);padding:6px 14px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:1px;}}
-  .timestamp{{background:rgba(237,46,56,0.08);border-left:3px solid var(--red);padding:8px 16px;font-size:11px;color:var(--gray-mid);}}
+  .timestamp{{background:rgba(237,46,56,0.08);border-left:3px solid var(--red);padding:8px 16px;font-size:11px;color:var(--gray-mid);display:flex;align-items:center;justify-content:space-between;gap:12px;}}
   .timestamp span{{color:var(--red);font-weight:700;}}
+  .print-btn{{background:var(--white);border:1px solid var(--red);color:var(--red);padding:5px 14px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer;white-space:nowrap;}}
+  .print-btn:hover{{background:var(--red);color:var(--white);}}
   .nav{{background:var(--white);border-bottom:2px solid var(--gray-light);padding:0 32px;display:flex;flex-wrap:wrap;}}
   .nav-btn{{padding:14px 18px;font-size:12px;font-weight:600;color:var(--gray-mid);border:none;background:none;cursor:pointer;border-bottom:3px solid transparent;transition:all .2s;}}
   .nav-btn.active{{color:var(--red);border-bottom-color:var(--red);}}
   .content{{padding:24px 32px;}}
   .section{{display:none;}}.section.active{{display:block;}}
+  @media print{{
+    body{{background:#fff;}}
+    .nav, .print-btn{{display:none !important;}}
+    .content{{padding:0 8px;}}
+    .table-card, .chart-card, .kpi-card{{break-inside:avoid;}}
+    .section{{display:none;}}
+    .section.active{{display:block;}}
+  }}
   .kpi-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px;}}
   .kpi-card{{background:var(--white);border-radius:8px;padding:18px 20px;border-left:4px solid var(--gray-mid);}}
   .kpi-card.positive{{border-left-color:var(--green);}}.kpi-card.negative{{border-left-color:var(--red);}}.kpi-card.neutral{{border-left-color:var(--amber);}}
@@ -529,7 +540,10 @@ def generar_html(meses, data, ultima_actualizacion):
   </div>
   <div class="header-badge">DIRECCIÓN OPERATIVA</div>
 </div>
-<div class="timestamp">Última actualización: <span>{ultima_actualizacion}</span></div>
+<div class="timestamp">
+  <div>Última actualización: <span>{ultima_actualizacion}</span></div>
+  <button class="print-btn" onclick="window.print()">🖨️ Imprimir esta sección</button>
+</div>
 <nav class="nav">
   <button class="nav-btn active" onclick="showSection('ranking',this)">Ranking & Comparativo</button>
   <button class="nav-btn" onclick="showSection('cumplimiento',this)">Cumplimiento Presupuestal</button>
@@ -631,14 +645,29 @@ def generar_html(meses, data, ultima_actualizacion):
   </div>
   <div class="table-card">
     <div class="table-title" id="tabla-dias-title">Detalle por Día de Semana</div>
-    <table><thead><tr><th>Día</th><th>Prom. Venta</th><th>Prom. Ticket</th><th>Prom. Clientes</th><th>Días registrados</th><th>Índice vs Mejor día</th></tr></thead>
+    <table><thead><tr><th>Día</th><th>Prom. Venta</th><th>Prom. Ticket</th><th>Prom. Clientes</th><th>Días registrados</th><th>Tendencia de Venta</th></tr></thead>
     <tbody id="tabla-dias-body"></tbody></table>
-    <div class="methodology-note">El <strong>objetivo diario</strong> mostrado en la gráfica es el promedio del objetivo semanal entre sus días (no distingue día por día, ya que la meta se define por semana). Los promedios de venta ya excluyen días futuros sin captura, respetando la parcialidad del período seleccionado.</div>
+    <div class="methodology-note">El <strong>objetivo diario</strong> mostrado en la gráfica es el promedio del objetivo semanal entre sus días (no distingue día por día, ya que la meta se define por semana). Los promedios de venta ya excluyen días futuros sin captura, respetando la parcialidad del período seleccionado. La <strong>Tendencia de Venta</strong> compara el promedio de las ocurrencias más recientes de ese día de la semana contra las ocurrencias previas dentro del período seleccionado (mínimo 4 registros para calcularse).</div>
   </div>
   <div class="table-card">
-    <div class="table-title">Comparativo por Día — Todas las Unidades</div>
-    <table><thead><tr><th>Día</th><th>A. León</th><th>A. Querétaro</th><th>Frascati</th><th>Mikoh</th><th>Mejor Unidad</th></tr></thead>
-    <tbody id="tabla-dias-comp"></tbody></table>
+    <div class="table-title" id="tabla-dias-comp-title">Comparativo Semanal por Día — Evolución 4 Semanas</div>
+    <table>
+      <thead>
+        <tr>
+          <th rowspan="2">Día</th>
+          <th colspan="4">Venta</th>
+          <th colspan="4">Ticket Promedio</th>
+          <th colspan="4">Clientes</th>
+        </tr>
+        <tr>
+          <th>Sem. Actual</th><th>Sem. -1</th><th>Sem. -2</th><th>Sem. -3</th>
+          <th>Sem. Actual</th><th>Sem. -1</th><th>Sem. -2</th><th>Sem. -3</th>
+          <th>Sem. Actual</th><th>Sem. -1</th><th>Sem. -2</th><th>Sem. -3</th>
+        </tr>
+      </thead>
+      <tbody id="tabla-dias-comp"></tbody>
+    </table>
+    <div class="methodology-note" id="tabla-dias-comp-note"></div>
   </div>
 </div>
 
@@ -646,6 +675,7 @@ def generar_html(meses, data, ultima_actualizacion):
 
 <script>
 const MESES   = {meses_json};
+const MES_ACTUAL = {mes_actual_json};
 const DATA    = {data_json};
 const UNIDADES = Object.keys(DATA);
 const COLORES  = {{'Argentilia León':'#656266','Argentilia Querétaro':'#ED2E38','Frascati':'#B5B0AD','Mikoh':'#1A7A4A'}};
@@ -662,25 +692,27 @@ let periodoUnidad = 'año';
 let periodoDias   = 'año';
 
 function getMesesPeriodo(estado) {{
-  if (estado === 'año')      return [...MESES];
-  if (estado === 'ultimos3') return MESES.slice(-3);
-  return [estado]; // mes específico
+  const MESES_CERRADOS = MESES.filter(m => m !== MES_ACTUAL);
+  if (estado === 'año')      return MESES_CERRADOS;
+  if (estado === 'ultimos3') return MESES_CERRADOS.slice(-3);
+  return [estado]; // mes específico, elegido explícitamente (puede ser el mes en curso)
 }}
 
 function etiquetaPeriodo(estado) {{
-  if (estado === 'año')      return 'Acumulado año';
-  if (estado === 'ultimos3') return 'Últimos 3 meses';
-  return estado;
+  if (estado === 'año')      return 'Acumulado año (meses cerrados)';
+  if (estado === 'ultimos3') return 'Últimos 3 meses cerrados';
+  return estado + (estado === MES_ACTUAL ? ' (en curso)' : '');
 }}
 
 // ── Calculadora de analisis_dia desde dias_por_mes ─────────────────────
 function calcAnalisisdDia(u, mesesFiltro) {{
-  const acum = Array.from({{length:7}}, ()=>({{'ventas':[],'tickets':[],'clientes':[]}}));
+  const acum = Array.from({{length:7}}, ()=>({{'ventas':[],'tickets':[],'clientes':[],'serie':[]}}));
   mesesFiltro.forEach(mes => {{
     const dias = (DATA[u].dias_por_mes||{{}})[mes] || [];
     dias.forEach(d => {{
       if (d.total > 0) {{
         acum[d.dow].ventas.push(d.total);
+        acum[d.dow].serie.push({{fecha:d.fecha, total:d.total}});
         if (d.comensales > 0) {{
           acum[d.dow].tickets.push(d.total / d.comensales);
           acum[d.dow].clientes.push(d.comensales);
@@ -688,13 +720,118 @@ function calcAnalisisdDia(u, mesesFiltro) {{
       }}
     }});
   }});
-  return acum.map((a,dow) => ({{
-    dia: DIAS_SEMANA[dow],
-    prom_venta:    a.ventas.length    ? a.ventas.reduce((x,y)=>x+y,0)/a.ventas.length       : 0,
-    prom_ticket:   a.tickets.length   ? a.tickets.reduce((x,y)=>x+y,0)/a.tickets.length     : 0,
-    prom_clientes: a.clientes.length  ? a.clientes.reduce((x,y)=>x+y,0)/a.clientes.length   : 0,
-    n_dias: a.ventas.length
-  }}));
+  return acum.map((a,dow) => {{
+    const serieOrdenada = a.serie.slice().sort((x,y)=> x.fecha<y.fecha?-1:(x.fecha>y.fecha?1:0));
+    return {{
+      dia: DIAS_SEMANA[dow],
+      prom_venta:    a.ventas.length    ? a.ventas.reduce((x,y)=>x+y,0)/a.ventas.length       : 0,
+      prom_ticket:   a.tickets.length   ? a.tickets.reduce((x,y)=>x+y,0)/a.tickets.length     : 0,
+      prom_clientes: a.clientes.length  ? a.clientes.reduce((x,y)=>x+y,0)/a.clientes.length   : 0,
+      n_dias: a.ventas.length,
+      serie: serieOrdenada
+    }};
+  }});
+}}
+
+// ── Tendencia de venta por día de semana (recientes vs previas) ────────
+function tendenciaDia(serie){{
+  if(!serie || serie.length < 4) return null;
+  const n = serie.length;
+  const nRec = Math.min(3, Math.floor(n/2));
+  const recientes  = serie.slice(n-nRec);
+  const anteriores = serie.slice(0, n-nRec);
+  const promRec = recientes.reduce((s,d)=>s+d.total,0)/recientes.length;
+  const promAnt = anteriores.reduce((s,d)=>s+d.total,0)/anteriores.length;
+  if(!promAnt) return null;
+  return (promRec-promAnt)/promAnt*100;
+}}
+function tendenciaBadgeHtml(pct){{
+  if(pct===null) return '<span style="color:#B5B0AD;font-size:11px">Datos insuficientes</span>';
+  const cls   = pct>1?'up':(pct<-1?'down':'flat');
+  const arrow = pct>1?'▲':(pct<-1?'▼':'▬');
+  const color = pct>1?'#1A7A4A':(pct<-1?'#ED2E38':'#B5B0AD');
+  return `<span class="trend-badge ${{cls}}" style="color:${{color}}">${{arrow}} ${{pct>0?'+':''}}${{pct.toFixed(1)}}%</span>`;
+}}
+
+// ── Comparativo semanal por día: semana en curso vs. hace 3 semanas ────
+function fmtFechaCorta(d){{
+  const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), day=String(d.getDate()).padStart(2,'0');
+  return `${{y}}-${{m}}-${{day}}`;
+}}
+function parseFechaLocal(s){{ return new Date(s+'T00:00:00'); }}
+function lunesDe(d){{
+  const dd = new Date(d);
+  const dow = dd.getDay(); // 0=Dom,1=Lun,...6=Sáb
+  const diff = (dow===0?-6:1)-dow;
+  dd.setDate(dd.getDate()+diff);
+  dd.setHours(0,0,0,0);
+  return dd;
+}}
+function buildComparativoSemanas(u){{
+  const porMes = DATA[u].dias_por_mes||{{}};
+  let flat=[];
+  Object.values(porMes).forEach(arr=>{{ flat = flat.concat(arr); }});
+  flat = flat.filter(d=>d.fecha && d.total>0);
+  if(!flat.length) return null;
+  const maxFecha = flat.reduce((max,d)=> d.fecha>max?d.fecha:max, flat[0].fecha);
+  const lunesActual = lunesDe(parseFechaLocal(maxFecha));
+  const mapSemana=(lunes)=>{{
+    const dom = new Date(lunes); dom.setDate(dom.getDate()+6);
+    const ini=fmtFechaCorta(lunes), fin=fmtFechaCorta(dom);
+    const m={{}};
+    flat.forEach(d=>{{ if(d.fecha>=ini && d.fecha<=fin) m[d.dow]=d; }});
+    return {{mapa:m, ini, fin}};
+  }};
+  // 4 semanas operativas Lun–Dom: la actual y las 3 inmediatas anteriores
+  const semanas = [0,1,2,3].map(offset=>{{
+    const lunes = new Date(lunesActual); lunes.setDate(lunes.getDate()-7*offset);
+    return mapSemana(lunes);
+  }});
+  return {{ semanas }}; // semanas[0]=actual, semanas[1]=Sem-1, semanas[2]=Sem-2, semanas[3]=Sem-3
+}}
+function fillTablaDiasComp(u){{
+  const comp = buildComparativoSemanas(u);
+  const titleEl = document.getElementById('tabla-dias-comp-title');
+  const noteEl  = document.getElementById('tabla-dias-comp-note');
+  const nombreU = u.replace('Argentilia ','A. ');
+  if(!comp){{
+    titleEl.textContent = `Comparativo Semanal por Día — ${{nombreU}}`;
+    noteEl.textContent  = 'Sin información suficiente para construir el comparativo semanal.';
+    document.getElementById('tabla-dias-comp').innerHTML = '';
+    return;
+  }}
+  const [sActual,s1,s2,s3] = comp.semanas;
+  titleEl.textContent = `Comparativo Semanal por Día — ${{nombreU}} · Evolución 4 semanas: Actual (${{sActual.ini}} a ${{sActual.fin}}) · Sem-1 (${{s1.ini}} a ${{s1.fin}}) · Sem-2 (${{s2.ini}} a ${{s2.fin}}) · Sem-3 (${{s3.ini}} a ${{s3.fin}})`;
+  noteEl.innerHTML = 'Cada columna es una semana operativa (Lun–Dom) real y completa, no un promedio. El Δ de cada semana anterior se calcula siempre contra la <strong>semana en curso</strong>, para ver el efecto acumulado de las estrategias implementadas semana a semana.';
+  const delta=(a,p)=>(a===null||p===null||!p)?null:(a-p)/p*100;
+  const celdaValor = (v, fmtFn) => v!==null ? fmtFn(v) : '—';
+  const celdaComparativa = (actual, previo, fmtFn) => {{
+    if(previo===null) return '<span style="color:#B5B0AD">—</span>';
+    const d = delta(actual, previo);
+    return `<div>${{fmtFn(previo)}}</div><div style="margin-top:2px">${{tendenciaBadgeHtml(d)}}</div>`;
+  }};
+  document.getElementById('tabla-dias-comp').innerHTML = DIAS_SEMANA.map((dia,dow)=>{{
+    const dA=sActual.mapa[dow], d1=s1.mapa[dow], d2=s2.mapa[dow], d3=s3.mapa[dow];
+    const venta  = d => d?d.total:null;
+    const ticket = d => (d&&d.comensales>0)?d.total/d.comensales:null;
+    const cliente= d => d?d.comensales:null;
+    const ventaA=venta(dA), tkA=ticket(dA), clA=cliente(dA);
+    return `<tr>
+      <td><strong>${{dia}}</strong></td>
+      <td><strong>${{celdaValor(ventaA,fmt)}}</strong></td>
+      <td>${{celdaComparativa(ventaA, venta(d1), fmt)}}</td>
+      <td>${{celdaComparativa(ventaA, venta(d2), fmt)}}</td>
+      <td>${{celdaComparativa(ventaA, venta(d3), fmt)}}</td>
+      <td><strong>${{celdaValor(tkA,fmtDec)}}</strong></td>
+      <td>${{celdaComparativa(tkA, ticket(d1), fmtDec)}}</td>
+      <td>${{celdaComparativa(tkA, ticket(d2), fmtDec)}}</td>
+      <td>${{celdaComparativa(tkA, ticket(d3), fmtDec)}}</td>
+      <td><strong>${{celdaValor(clA,v=>Math.round(v).toString())}}</strong></td>
+      <td>${{celdaComparativa(clA, cliente(d1), v=>Math.round(v).toString())}}</td>
+      <td>${{celdaComparativa(clA, cliente(d2), v=>Math.round(v).toString())}}</td>
+      <td>${{celdaComparativa(clA, cliente(d3), v=>Math.round(v).toString())}}</td>
+    </tr>`;
+  }}).join('');
 }}
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -709,7 +846,7 @@ window.addEventListener('DOMContentLoaded',()=>{{
   buildDetalleUnidad(currentRest, getMesesPeriodo(periodoUnidad)); fillTablaSemana(currentRest, getMesesPeriodo(periodoUnidad));
   buildMixFiltros(); buildMixBar(currentMixMes); buildTicketMes(currentMixMes); fillTablaMix();
   buildDiasRestTabs(); buildPeriodoBar('dias-periodo-bar', ()=>periodoDias, v=>{{periodoDias=v;}}, refrescarDias, 'dias-periodo-badge');
-  buildDiasCharts(currentDiaRest, getMesesPeriodo(periodoDias)); fillTablaDias(currentDiaRest, getMesesPeriodo(periodoDias)); fillTablaDiasComp(getMesesPeriodo(periodoDias));
+  buildDiasCharts(currentDiaRest, getMesesPeriodo(periodoDias)); fillTablaDias(currentDiaRest, getMesesPeriodo(periodoDias)); fillTablaDiasComp(currentDiaRest);
   renderDiasExtras(currentDiaRest, getMesesPeriodo(periodoDias));
 }});
 
@@ -765,7 +902,7 @@ function refrescarDias() {{
   const mp = getMesesPeriodo(periodoDias);
   buildDiasCharts(currentDiaRest, mp);
   fillTablaDias(currentDiaRest, mp);
-  fillTablaDiasComp(mp);
+  fillTablaDiasComp(currentDiaRest);
   renderDiasExtras(currentDiaRest, mp);
 }}
 
@@ -988,7 +1125,7 @@ function selectDiaRest(u,btn){{
   document.querySelectorAll('#dias .rest-tab').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   const mp=getMesesPeriodo(periodoDias);
-  buildDiasCharts(u,mp); fillTablaDias(u,mp); renderDiasExtras(u,mp);
+  buildDiasCharts(u,mp); fillTablaDias(u,mp); fillTablaDiasComp(u); renderDiasExtras(u,mp);
 }}
 
 // ── Bandera automática de captura + KPIs de objetivo/acumulado ─────────
@@ -1066,37 +1203,18 @@ function fillTablaDias(u, mesesFiltro){{
   const ad=calcAnalisisdDia(u, mesesFiltro);
   const maxVenta=Math.max(...ad.map(d=>d.prom_venta));
   document.getElementById('tabla-dias-body').innerHTML=ad.map(d=>{{
-    const idx=maxVenta>0?(d.prom_venta/maxVenta*100).toFixed(0):0;
     const esMejor=d.prom_venta===maxVenta;
     const c=esMejor?'color:#ED2E38;font-weight:700':'';
+    const tend=tendenciaDia(d.serie);
     return `<tr>
       <td style="${{c}}">${{d.dia}}${{esMejor?' ⭐':''}}</td>
       <td style="${{c}}">${{fmt(d.prom_venta)}}</td>
       <td>${{fmtDec(d.prom_ticket)}}</td>
       <td>${{Math.round(d.prom_clientes)}}</td>
       <td style="color:#B5B0AD">${{d.n_dias}} días</td>
-      <td style="width:180px">
-        <div class="dia-bar-wrap">
-          <div class="dia-bar"><div class="dia-bar-fill" style="width:${{idx}}%;background:${{esMejor?'#ED2E38':'#B5B0AD'}}"></div></div>
-          <div class="dia-val">${{idx}}%</div>
-        </div>
-      </td>
+      <td>${{tendenciaBadgeHtml(tend)}}</td>
     </tr>`;
   }}).join('');
-}}
-function fillTablaDiasComp(mesesFiltro){{
-  const rows=Array.from({{length:7}},(_,dow)=>{{
-    const vals=UNIDADES.map(u=>{{
-      const ad=calcAnalisisdDia(u,mesesFiltro);
-      return ad[dow]?ad[dow].prom_venta:0;
-    }});
-    const maxVal=Math.max(...vals);
-    const bestU=UNIDADES[vals.indexOf(maxVal)];
-    return `<tr><td><strong>${{DIAS_SEMANA[dow]}}</strong></td>
-      ${{UNIDADES.map((u,i)=>`<td style="${{vals[i]===maxVal?'color:#1A7A4A;font-weight:700':''}}">${{fmt(vals[i])}}</td>`).join('')}}
-      <td style="color:#1A7A4A;font-weight:700">${{bestU.replace('Argentilia ','A. ')}}</td></tr>`;
-  }}).join('');
-  document.getElementById('tabla-dias-comp').innerHTML=rows;
 }}
 </script>
 </body>
