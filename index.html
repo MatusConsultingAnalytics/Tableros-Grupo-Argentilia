@@ -95,7 +95,7 @@
   <div class="header-badge">DIRECCIÓN OPERATIVA</div>
 </div>
 <div class="timestamp">
-  <div>Última actualización: <span>23/07/2026 06:44 PM (Hora CDMX)</span></div>
+  <div>Última actualización: <span>23/07/2026 06:59 PM (Hora CDMX)</span></div>
   <button class="print-btn" onclick="window.print()">🖨️ Imprimir esta sección</button>
 </div>
 <nav class="nav">
@@ -201,10 +201,15 @@
     <div class="table-title" id="tabla-dias-title">Detalle por Día de Semana</div>
     <table><thead><tr><th>Día</th><th>Prom. Venta</th><th>Prom. Ticket</th><th>Prom. Clientes</th><th>Días registrados</th><th>Tendencia de Venta</th></tr></thead>
     <tbody id="tabla-dias-body"></tbody></table>
-    <div class="methodology-note">El <strong>objetivo diario</strong> mostrado en la gráfica es el promedio del objetivo semanal entre sus días (no distingue día por día, ya que la meta se define por semana). Los promedios de venta ya excluyen días futuros sin captura, respetando la parcialidad del período seleccionado. La <strong>Tendencia de Venta</strong> compara el promedio de las ocurrencias más recientes de ese día de la semana contra las ocurrencias previas dentro del período seleccionado (mínimo 4 registros para calcularse).</div>
+    <div class="methodology-note">El <strong>objetivo diario</strong> mostrado en la gráfica es el promedio del objetivo semanal entre sus días (no distingue día por día, ya que la meta se define por semana). Los promedios de venta ya excluyen días futuros sin captura, respetando la parcialidad del período seleccionado. La <strong>Tendencia de Venta</strong> compara el último registro real de ese día de la semana contra el promedio de sus registros previos dentro del período seleccionado (mínimo 2 registros para calcularse).</div>
   </div>
   <div class="table-card">
     <div class="table-title" id="tabla-dias-comp-title">Comparativo Semanal por Día — Evolución 4 Semanas</div>
+    <div class="filter-bar" id="dias-comp-ancla-bar">
+      <span class="filter-label">Semana de referencia:</span>
+      <button class="filter-btn active" data-ancla="actual" onclick="setAnclaComparativo('actual',this)">Semana en curso (parcial)</button>
+      <button class="filter-btn" data-ancla="pasada" onclick="setAnclaComparativo('pasada',this)">Última semana completa</button>
+    </div>
     <table>
       <thead>
         <tr>
@@ -214,9 +219,9 @@
           <th colspan="4">Clientes</th>
         </tr>
         <tr>
-          <th>Sem. Actual</th><th>Sem. -1</th><th>Sem. -2</th><th>Sem. -3</th>
-          <th>Sem. Actual</th><th>Sem. -1</th><th>Sem. -2</th><th>Sem. -3</th>
-          <th>Sem. Actual</th><th>Sem. -1</th><th>Sem. -2</th><th>Sem. -3</th>
+          <th id="th-comp-1">Sem. Actual</th><th>Sem. -1</th><th>Sem. -2</th><th>Sem. -3</th>
+          <th id="th-comp-2">Sem. Actual</th><th>Sem. -1</th><th>Sem. -2</th><th>Sem. -3</th>
+          <th id="th-comp-3">Sem. Actual</th><th>Sem. -1</th><th>Sem. -2</th><th>Sem. -3</th>
         </tr>
       </thead>
       <tbody id="tabla-dias-comp"></tbody>
@@ -287,17 +292,15 @@ function calcAnalisisdDia(u, mesesFiltro) {
   });
 }
 
-// ── Tendencia de venta por día de semana (recientes vs previas) ────────
+// ── Tendencia de venta por día de semana: último registro real vs. promedio de los anteriores ──
 function tendenciaDia(serie){
-  if(!serie || serie.length < 4) return null;
+  if(!serie || serie.length < 2) return null;
   const n = serie.length;
-  const nRec = Math.min(3, Math.floor(n/2));
-  const recientes  = serie.slice(n-nRec);
-  const anteriores = serie.slice(0, n-nRec);
-  const promRec = recientes.reduce((s,d)=>s+d.total,0)/recientes.length;
+  const ultimo = serie[n-1];
+  const anteriores = serie.slice(0, n-1);
   const promAnt = anteriores.reduce((s,d)=>s+d.total,0)/anteriores.length;
   if(!promAnt) return null;
-  return (promRec-promAnt)/promAnt*100;
+  return (ultimo.total-promAnt)/promAnt*100;
 }
 function tendenciaBadgeHtml(pct){
   if(pct===null) return '<span style="color:#B5B0AD;font-size:11px">Datos insuficientes</span>';
@@ -321,7 +324,14 @@ function lunesDe(d){
   dd.setHours(0,0,0,0);
   return dd;
 }
-function buildComparativoSemanas(u){
+let anclaComparativoSemana = 'actual';
+function setAnclaComparativo(val, btn){
+  anclaComparativoSemana = val;
+  document.querySelectorAll('#dias-comp-ancla-bar .filter-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  fillTablaDiasComp(currentDiaRest);
+}
+function buildComparativoSemanas(u, ancla){
   const porMes = DATA[u].dias_por_mes||{};
   let flat=[];
   Object.values(porMes).forEach(arr=>{ flat = flat.concat(arr); });
@@ -336,36 +346,46 @@ function buildComparativoSemanas(u){
     flat.forEach(d=>{ if(d.fecha>=ini && d.fecha<=fin) m[d.dow]=d; });
     return {mapa:m, ini, fin};
   };
-  // 4 semanas operativas Lun–Dom: la actual y las 3 inmediatas anteriores
-  const semanas = [0,1,2,3].map(offset=>{
+  // El ancla define desde dónde se cuentan las 4 semanas: 'actual' = semana en
+  // curso (offset 0, puede estar parcial); 'pasada' = última semana YA CERRADA
+  // (offset 1), para poder comparar 7 días completos contra 7 días completos.
+  const offsetBase = (ancla==='pasada') ? 1 : 0;
+  const semanas = [0,1,2,3].map(i=>{
+    const offset = offsetBase + i;
     const lunes = new Date(lunesActual); lunes.setDate(lunes.getDate()-7*offset);
     return mapSemana(lunes);
   });
-  return { semanas }; // semanas[0]=actual, semanas[1]=Sem-1, semanas[2]=Sem-2, semanas[3]=Sem-3
+  return { semanas }; // semanas[0]=ancla, semanas[1]=ancla-1, semanas[2]=ancla-2, semanas[3]=ancla-3
 }
 function fillTablaDiasComp(u){
-  const comp = buildComparativoSemanas(u);
+  const ancla = anclaComparativoSemana;
+  const comp = buildComparativoSemanas(u, ancla);
   const titleEl = document.getElementById('tabla-dias-comp-title');
   const noteEl  = document.getElementById('tabla-dias-comp-note');
   const nombreU = u.replace('Argentilia ','A. ');
+  const etiquetaAncla = ancla==='pasada' ? 'Última semana completa' : 'Semana en curso (parcial)';
+  ['th-comp-1','th-comp-2','th-comp-3'].forEach(id=>{ document.getElementById(id).textContent = ancla==='pasada' ? 'Sem. Pasada' : 'Sem. Actual'; });
   if(!comp){
     titleEl.textContent = `Comparativo Semanal por Día — ${nombreU}`;
     noteEl.textContent  = 'Sin información suficiente para construir el comparativo semanal.';
     document.getElementById('tabla-dias-comp').innerHTML = '';
     return;
   }
-  const [sActual,s1,s2,s3] = comp.semanas;
-  titleEl.textContent = `Comparativo Semanal por Día — ${nombreU} · Evolución 4 semanas: Actual (${sActual.ini} a ${sActual.fin}) · Sem-1 (${s1.ini} a ${s1.fin}) · Sem-2 (${s2.ini} a ${s2.fin}) · Sem-3 (${s3.ini} a ${s3.fin})`;
-  noteEl.innerHTML = 'Cada columna es una semana operativa (Lun–Dom) real y completa, no un promedio. El Δ de cada semana anterior se calcula siempre contra la <strong>semana en curso</strong>, para ver el efecto acumulado de las estrategias implementadas semana a semana.';
+  const [sAncla,s1,s2,s3] = comp.semanas;
+  titleEl.textContent = `Comparativo Semanal por Día — ${nombreU} · ${etiquetaAncla} (${sAncla.ini} a ${sAncla.fin}) vs. Sem-1 (${s1.ini} a ${s1.fin}) · Sem-2 (${s2.ini} a ${s2.fin}) · Sem-3 (${s3.ini} a ${s3.fin})`;
+  noteEl.innerHTML = ancla==='pasada'
+    ? 'Se compara la <strong>última semana operativa ya cerrada</strong> (Lun–Dom completa) contra las 3 semanas operativas anteriores a esa — útil para un comparativo con los 7 días completos, sin huecos por días aún no transcurridos. Los días pueden pertenecer a meses distintos; eso no afecta el cálculo.'
+    : 'Se compara la <strong>semana en curso</strong> (puede estar parcial si aún no termina) contra las 3 semanas operativas anteriores. Los días marcados "Pendiente" son días de la semana en curso que todavía no ocurren. Los días pueden pertenecer a meses distintos; eso no afecta el cálculo.';
   const delta=(a,p)=>(a===null||p===null||!p)?null:(a-p)/p*100;
   const celdaValor = (v, fmtFn) => v!==null ? fmtFn(v) : '—';
   const celdaComparativa = (actual, previo, fmtFn) => {
     if(previo===null) return '<span style="color:#B5B0AD">—</span>';
+    if(actual===null) return `<div>${fmtFn(previo)}</div><div style="margin-top:2px"><span style="color:#B5B0AD;font-size:11px">Pendiente</span></div>`;
     const d = delta(actual, previo);
     return `<div>${fmtFn(previo)}</div><div style="margin-top:2px">${tendenciaBadgeHtml(d)}</div>`;
   };
   document.getElementById('tabla-dias-comp').innerHTML = DIAS_SEMANA.map((dia,dow)=>{
-    const dA=sActual.mapa[dow], d1=s1.mapa[dow], d2=s2.mapa[dow], d3=s3.mapa[dow];
+    const dA=sAncla.mapa[dow], d1=s1.mapa[dow], d2=s2.mapa[dow], d3=s3.mapa[dow];
     const venta  = d => d?d.total:null;
     const ticket = d => (d&&d.comensales>0)?d.total/d.comensales:null;
     const cliente= d => d?d.comensales:null;
