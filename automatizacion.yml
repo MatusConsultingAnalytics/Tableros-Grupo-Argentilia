@@ -2,22 +2,21 @@ name: Actualizar Tablero
 
 on:
   schedule:
-    - cron: '0 20 * * 1'
-    - cron: '0 20 * * 4'
+    - cron: '30 20 * * 1,4'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v3
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
       - name: Instalar dependencias
-        run: pip install pandas openpyxl requests
+        run: pip install pandas openpyxl gdown PyGithub
 
       - name: Correr script
         env:
@@ -25,7 +24,7 @@ jobs:
         run: python3 generar_tablero.py
 
       - name: Publicar tablero
-        uses: peaceiris/actions-gh-pages@v4
+        uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./
