@@ -759,7 +759,7 @@ def generar_html(meses, data, ultima_actualizacion, data_2025=None):
         <thead><tr><th>Métrica</th><th>2025</th><th>2026</th><th>Δ 2026 vs 2025</th><th>Objetivo/Meta 2026</th><th>Cumplimiento vs. Objetivo</th></tr></thead>
         <tbody id="comp2025-mensual-body"></tbody>
       </table>
-      <div class="methodology-note">El objetivo/meta 2026 de <strong>Venta Alimentos</strong> y <strong>Venta Bebidas</strong> se calcula como el 60% y 40% del objetivo total de venta del mes, respectivamente (la hoja de captura solo define un objetivo de venta total, no por categoría). <strong>Venta Total</strong>, <strong>Comensales</strong> y <strong>Ticket Promedio</strong> usan su objetivo/meta capturado directamente en la hoja.</div>
+      <div class="methodology-note">El objetivo/meta 2026 de <strong>Venta Alimentos</strong> y <strong>Venta Bebidas</strong> se calcula como el 60% y 40% de la <strong>venta real total</strong> del mes (no del objetivo de venta), respectivamente — la hoja de captura solo define un objetivo de venta total, no por categoría. Junto al valor 2026 de esas dos filas se muestra entre paréntesis el <strong>% real</strong> que esa categoría representó sobre la venta total, como referencia para comparar contra el 60%/40% objetivo. <strong>Venta Total</strong>, <strong>Comensales</strong> y <strong>Ticket Promedio</strong> usan su objetivo/meta capturado directamente en la hoja.</div>
     </div>
   </div>
 </div>
@@ -1058,19 +1058,20 @@ function refrescarComp2025(){{
   const cli26=DATA[u].clientes[idx]||0, cliMeta26=DATA[u].clientesMeta[idx]||0;
   const tk26=DATA[u].ticket[idx]||0, tkMeta26=DATA[u].ticketMeta[idx]||0;
   const filasMes = [
-    ['Venta Alimentos', entry2025.alimentos, alim26, presup26>0 ? presup26*0.60 : null],
-    ['Venta Bebidas',   entry2025.bebidas,   beb26,  presup26>0 ? presup26*0.40 : null],
-    ['Venta Total',     entry2025.total,     total26, presup26],
-    ['Comensales',      entry2025.comensales, cli26,  cliMeta26],
-    ['Ticket Promedio', entry2025.ticket,    tk26,   tkMeta26],
-  ].map(([label,v25,v26,obj])=>{{
+    ['Venta Alimentos', entry2025.alimentos, alim26, total26>0 ? total26*0.60 : null, total26>0 ? (alim26/total26*100) : null],
+    ['Venta Bebidas',   entry2025.bebidas,   beb26,  total26>0 ? total26*0.40 : null, total26>0 ? (beb26/total26*100) : null],
+    ['Venta Total',     entry2025.total,     total26, presup26, null],
+    ['Comensales',      entry2025.comensales, cli26,  cliMeta26, null],
+    ['Ticket Promedio', entry2025.ticket,    tk26,   tkMeta26, null],
+  ].map(([label,v25,v26,obj,mixPct])=>{{
     const esMoneda = label!=='Comensales';
     const esTicket = label==='Ticket Promedio';
     const fmtFn = esTicket?fmtDec:(esMoneda?fmt:(v=>Math.round(v).toLocaleString('es-MX')));
+    const refMix = mixPct!==null ? ` <span style="color:#B5B0AD;font-size:11px">(${{mixPct.toFixed(1)}}% real)</span>` : '';
     return `<tr>
       <td><strong>${{label}}</strong></td>
       <td>${{celda(v25,fmtFn)}}</td>
-      <td>${{celda(v26,fmtFn)}}</td>
+      <td>${{celda(v26,fmtFn)}}${{refMix}}</td>
       <td>${{comp2025DeltaBadge(v26,v25)}}</td>
       <td>${{obj?fmtFn(obj):'<span style="color:#B5B0AD">—</span>'}}</td>
       <td>${{obj?comp2025CumplBadge(v26,obj):'<span style="color:#B5B0AD">—</span>'}}</td>
