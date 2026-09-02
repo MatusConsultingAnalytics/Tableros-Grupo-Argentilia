@@ -42,6 +42,10 @@ HOJAS_STAFF = {
     "Mikoh":                "Mikoh - Staff",
 }
 
+# ── Hojas históricas 2025 (mismo layout de columnas/filas que las hojas
+# 2026; una hoja por unidad, nombrada "2025 " + nombre exacto de la unidad) ──
+HOJAS_2025 = {nombre: f"2025 {sheet}" for nombre, sheet in HOJAS.items()}
+
 COMENSALES_SIMPLE = {"Argentilia León", "Mikoh"}
 
 MESES_ORDEN = ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
@@ -381,6 +385,46 @@ def extraer_datos():
             print(f"⚠️  Error leyendo {nombre}: {e}")
     return datos
 
+def extraer_datos_2025():
+    """Lee las hojas históricas 2025 (mismo layout que las hojas 2026).
+    Si una hoja aún no existe o no tiene datos, se omite sin tronar el
+    proceso — Nat las va cargando progresivamente."""
+    datos = {}
+    for nombre, sheet in HOJAS_2025.items():
+        try:
+            meses = leer_excel(sheet, nombre)
+            datos[nombre] = meses
+            print(f"✅ 2025 leído: {nombre}")
+        except Exception as e:
+            print(f"⚠️  Sin hoja 2025 para {nombre} todavía ({e})")
+            datos[nombre] = {}
+    return datos
+
+def construir_js_2025(datos_2025):
+    """Payload liviano por unidad/mes: totales del mes (alimentos, bebidas,
+    total, comensales, ticket) + los días crudos (para poder agrupar por
+    semana en el navegador, igual que se hace con los datos 2026)."""
+    data_js = {}
+    for u in HOJAS.keys():
+        meses = datos_2025.get(u, {})
+        por_mes = {}
+        for mes_nombre, md in meses.items():
+            tot = md.get('total')
+            if not tot or not tot.get('total'):
+                continue  # mes sin captura real todavía, se omite
+            cheque   = md.get('cheque') or {}
+            clientes = md.get('clientes') or {}
+            por_mes[mes_nombre] = {
+                'alimentos':  tot.get('alimentos', 0),
+                'bebidas':    tot.get('bebidas', 0),
+                'total':      tot.get('total', 0),
+                'comensales': clientes.get('real', 0),
+                'ticket':     cheque.get('real', 0),
+                'dias':       md.get('dias', []),
+            }
+        data_js[u] = por_mes
+    return data_js
+
 def construir_js(datos):
     meses_con_data = set()
     for nombre, d in datos.items():
@@ -439,9 +483,10 @@ def construir_js(datos):
         }
     return meses_lista, data_js
 
-def generar_html(meses, data, ultima_actualizacion):
+def generar_html(meses, data, ultima_actualizacion, data_2025=None):
     meses_json = json.dumps(meses, ensure_ascii=False)
     data_json  = json.dumps(data,  ensure_ascii=False)
+    data_2025_json = json.dumps(data_2025 or {}, ensure_ascii=False)
     mes_actual_json = json.dumps(MESES_ES[HOY.month - 1], ensure_ascii=False)
 
     html = f"""<!DOCTYPE html>
@@ -550,6 +595,7 @@ def generar_html(meses, data, ultima_actualizacion):
   <button class="nav-btn" onclick="showSection('unidad',this)">Detalle por Unidad</button>
   <button class="nav-btn" onclick="showSection('mix',this)">Mix A&B · Ticket</button>
   <button class="nav-btn" onclick="showSection('dias',this)">Análisis por Día</button>
+  <button class="nav-btn" onclick="showSection('comp2025',this)">2025 vs 2026</button>
 </nav>
 <div class="content">
 
@@ -676,12 +722,55 @@ def generar_html(meses, data, ultima_actualizacion):
   </div>
 </div>
 
+<div id="comp2025" class="section">
+  <div class="section-eyebrow">Histórico vs. Año en Curso</div>
+  <div class="section-heading">Comparativo 2025 vs. 2026 <span class="periodo-badge" id="comp2025-mes-badge">—</span></div>
+  <div class="rest-tabs" id="comp2025-rest-tabs"></div>
+  <div class="filter-bar" id="comp2025-mes-bar">
+    <span class="filter-label">Mes (a fecha vencida, mes completo):</span>
+  </div>
+  <div id="comp2025-sin-datos" class="methodology-note" style="display:none"></div>
+  <div id="comp2025-contenido">
+    <div class="table-card">
+      <div class="table-title" id="comp2025-semanal-title">Semana a Semana</div>
+      <table>
+        <thead>
+          <tr>
+            <th rowspan="2">Semana</th>
+            <th colspan="3">Venta Alimentos</th>
+            <th colspan="3">Venta Bebidas</th>
+            <th colspan="3">Comensales</th>
+            <th colspan="3">Ticket Promedio</th>
+          </tr>
+          <tr>
+            <th>2025</th><th>2026</th><th>Δ</th>
+            <th>2025</th><th>2026</th><th>Δ</th>
+            <th>2025</th><th>2026</th><th>Δ</th>
+            <th>2025</th><th>2026</th><th>Δ</th>
+          </tr>
+        </thead>
+        <tbody id="comp2025-semanal-body"></tbody>
+      </table>
+      <div class="methodology-note">Cada renglón es una semana operativa (Lun–Dom) dentro del mes elegido — "Semana 1" de 2025 se compara contra "Semana 1" de 2026 por posición, no por fecha exacta (el mismo mes puede empezar en distinto día de la semana según el año). El Δ es la variación porcentual de 2026 vs. 2025.</div>
+    </div>
+    <div class="table-card">
+      <div class="table-title">Resultado de Mes Completo — vs. Objetivo 2026</div>
+      <table>
+        <thead><tr><th>Métrica</th><th>2025</th><th>2026</th><th>Δ 2026 vs 2025</th><th>Objetivo/Meta 2026</th><th>Cumplimiento vs. Objetivo</th></tr></thead>
+        <tbody id="comp2025-mensual-body"></tbody>
+      </table>
+      <div class="methodology-note">La <strong>Venta Alimentos</strong> y <strong>Venta Bebidas</strong> no tienen objetivo individual en la hoja de captura (el objetivo se define solo para venta total, comensales y ticket promedio), por eso esas dos filas no muestran columna de cumplimiento.</div>
+    </div>
+  </div>
+</div>
+
 </div>
 
 <script>
 const MESES   = {meses_json};
 const MES_ACTUAL = {mes_actual_json};
 const DATA    = {data_json};
+const DATA_2025 = {data_2025_json};
 const UNIDADES = Object.keys(DATA);
 const COLORES  = {{'Argentilia León':'#656266','Argentilia Querétaro':'#ED2E38','Frascati':'#B5B0AD','Mikoh':'#1A7A4A'}};
 const DIAS_SEMANA = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
@@ -854,6 +943,142 @@ function fillTablaDiasComp(u){{
   }}).join('');
 }}
 
+// ── Comparativo 2025 vs 2026 ────────────────────────────────────────────
+let currentComp2025Unidad = UNIDADES[0];
+let currentComp2025Mes = null;
+
+function agruparPorSemanaJS(dias){{
+  const ordenados = dias.slice().sort((a,b)=> a.fecha<b.fecha?-1:(a.fecha>b.fecha?1:0));
+  const buckets=[]; let actual=[];
+  ordenados.forEach(d=>{{
+    if(d.dow===0 && actual.length){{ buckets.push(actual); actual=[]; }}
+    actual.push(d);
+  }});
+  if(actual.length) buckets.push(actual);
+  return buckets;
+}}
+function resumenSemanaJS(bucket){{
+  const alimentos = bucket.reduce((s,d)=>s+(d.alimentos||0),0);
+  const bebidas   = bucket.reduce((s,d)=>s+(d.bebidas||0),0);
+  const total     = bucket.reduce((s,d)=>s+(d.total||0),0);
+  const comensales= bucket.reduce((s,d)=>s+(d.comensales||0),0);
+  return {{alimentos,bebidas,total,comensales,ticket:comensales>0?total/comensales:null,fi:bucket[0].fecha,ff:bucket[bucket.length-1].fecha}};
+}}
+function mesesCerradosComp2025(){{ return MESES.filter(m=>m!==MES_ACTUAL); }}
+function buildComp2025RestTabs(){{
+  document.getElementById('comp2025-rest-tabs').innerHTML = UNIDADES.map((u,i)=>
+    `<button class="rest-tab${{u===currentComp2025Unidad?' active':''}}" onclick="selectComp2025Unidad('${{u}}',this)">${{u.replace('Argentilia ','A. ')}}</button>`).join('');
+}}
+function selectComp2025Unidad(u,btn){{
+  currentComp2025Unidad = u;
+  document.querySelectorAll('#comp2025-rest-tabs .rest-tab').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  refrescarComp2025();
+}}
+function buildComp2025MesBar(){{
+  const wrap = document.getElementById('comp2025-mes-bar');
+  const cerrados = mesesCerradosComp2025();
+  if(!currentComp2025Mes || !cerrados.includes(currentComp2025Mes)){{
+    currentComp2025Mes = cerrados.length ? cerrados[cerrados.length-1] : null;
+  }}
+  wrap.innerHTML = '<span class="filter-label">Mes (a fecha vencida, mes completo):</span>' + cerrados.map(m=>
+    `<button class="filter-btn${{m===currentComp2025Mes?' active':''}}" onclick="selectComp2025Mes('${{m}}',this)">${{m}}</button>`).join('');
+}}
+function selectComp2025Mes(m,btn){{
+  currentComp2025Mes = m;
+  document.querySelectorAll('#comp2025-mes-bar .filter-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  refrescarComp2025();
+}}
+function comp2025DeltaBadge(actual,base){{
+  if(actual===null||base===null||!base) return '<span style="color:#B5B0AD;font-size:11px">Datos insuficientes</span>';
+  const d=(actual-base)/base*100;
+  const cls=d>1?'up':(d<-1?'down':'flat');
+  const arrow=d>1?'▲':(d<-1?'▼':'▬');
+  const color=d>1?'#1A7A4A':(d<-1?'#ED2E38':'#B5B0AD');
+  return `<span class="trend-badge ${{cls}}" style="color:${{color}}">${{arrow}} ${{d>0?'+':''}}${{d.toFixed(1)}}%</span>`;
+}}
+function comp2025CumplBadge(actual,objetivo){{
+  if(objetivo===null||!objetivo) return '<span style="color:#B5B0AD">— sin objetivo —</span>';
+  const p = actual/objetivo*100;
+  const color = p>=100 ? '#1A7A4A' : '#ED2E38';
+  return `<span style="color:${{color}};font-weight:700">${{p.toFixed(1)}}%</span>`;
+}}
+function refrescarComp2025(){{
+  buildComp2025RestTabs();
+  buildComp2025MesBar();
+  const u = currentComp2025Unidad, mes = currentComp2025Mes;
+  document.getElementById('comp2025-mes-badge').textContent = mes ? mes+' 2026 vs. '+mes+' 2025' : '—';
+  const entry2025 = (DATA_2025[u]||{{}})[mes];
+  const sinDatosEl = document.getElementById('comp2025-sin-datos');
+  const contenidoEl = document.getElementById('comp2025-contenido');
+  if(!mes){{
+    sinDatosEl.style.display='block';
+    sinDatosEl.textContent = 'No hay meses cerrados disponibles todavía para comparar.';
+    contenidoEl.style.display='none';
+    return;
+  }}
+  if(!entry2025){{
+    sinDatosEl.style.display='block';
+    sinDatosEl.textContent = `Aún no hay datos 2025 cargados para ${{u.replace('Argentilia ','A. ')}} en ${{mes}} (hoja "2025 ${{u}}"). En cuanto se cargue esa información, este comparativo se completa automáticamente.`;
+    contenidoEl.style.display='none';
+    return;
+  }}
+  sinDatosEl.style.display='none';
+  contenidoEl.style.display='block';
+
+  // ── Semana a semana ──────────────────────────────────────────────────
+  const dias2026 = (DATA[u].dias_por_mes||{{}})[mes] || [];
+  const semanas2026 = agruparPorSemanaJS(dias2026.filter(d=>d.total>0)).map(resumenSemanaJS);
+  const semanas2025 = agruparPorSemanaJS((entry2025.dias||[]).filter(d=>d.total>0)).map(resumenSemanaJS);
+  const nSemanas = Math.max(semanas2026.length, semanas2025.length);
+  document.getElementById('comp2025-semanal-title').textContent = `Semana a Semana — ${{mes}} · ${{u.replace('Argentilia ','A. ')}}`;
+  const celda = (v,fmtFn) => v!==null&&v!==undefined ? fmtFn(v) : '—';
+  let filas='';
+  for(let i=0;i<nSemanas;i++){{
+    const s26=semanas2026[i], s25=semanas2025[i];
+    const a26=s26?s26.alimentos:null, a25=s25?s25.alimentos:null;
+    const b26=s26?s26.bebidas:null,   b25=s25?s25.bebidas:null;
+    const c26=s26?s26.comensales:null,c25=s25?s25.comensales:null;
+    const t26=s26?s26.ticket:null,    t25=s25?s25.ticket:null;
+    filas += `<tr>
+      <td><strong>Semana ${{i+1}}</strong></td>
+      <td>${{celda(a25,fmt)}}</td><td>${{celda(a26,fmt)}}</td><td>${{comp2025DeltaBadge(a26,a25)}}</td>
+      <td>${{celda(b25,fmt)}}</td><td>${{celda(b26,fmt)}}</td><td>${{comp2025DeltaBadge(b26,b25)}}</td>
+      <td>${{celda(c25,v=>Math.round(v).toString())}}</td><td>${{celda(c26,v=>Math.round(v).toString())}}</td><td>${{comp2025DeltaBadge(c26,c25)}}</td>
+      <td>${{celda(t25,fmtDec)}}</td><td>${{celda(t26,fmtDec)}}</td><td>${{comp2025DeltaBadge(t26,t25)}}</td>
+    </tr>`;
+  }}
+  document.getElementById('comp2025-semanal-body').innerHTML = filas;
+
+  // ── Resultado de mes completo vs. objetivo 2026 ──────────────────────
+  const idx = MESES.indexOf(mes);
+  const total26=DATA[u].total[idx]||0, presup26=DATA[u].presup[idx]||0;
+  const alim26=DATA[u].alimentos[idx]||0, beb26=DATA[u].bebidas[idx]||0;
+  const cli26=DATA[u].clientes[idx]||0, cliMeta26=DATA[u].clientesMeta[idx]||0;
+  const tk26=DATA[u].ticket[idx]||0, tkMeta26=DATA[u].ticketMeta[idx]||0;
+  const filasMes = [
+    ['Venta Alimentos', entry2025.alimentos, alim26, null],
+    ['Venta Bebidas',   entry2025.bebidas,   beb26,  null],
+    ['Venta Total',     entry2025.total,     total26, presup26],
+    ['Comensales',      entry2025.comensales, cli26,  cliMeta26],
+    ['Ticket Promedio', entry2025.ticket,    tk26,   tkMeta26],
+  ].map(([label,v25,v26,obj])=>{{
+    const esMoneda = label!=='Comensales';
+    const esTicket = label==='Ticket Promedio';
+    const fmtFn = esTicket?fmtDec:(esMoneda?fmt:(v=>Math.round(v).toLocaleString('es-MX')));
+    return `<tr>
+      <td><strong>${{label}}</strong></td>
+      <td>${{celda(v25,fmtFn)}}</td>
+      <td>${{celda(v26,fmtFn)}}</td>
+      <td>${{comp2025DeltaBadge(v26,v25)}}</td>
+      <td>${{obj?fmtFn(obj):'<span style="color:#B5B0AD">—</span>'}}</td>
+      <td>${{obj?comp2025CumplBadge(v26,obj):'<span style="color:#B5B0AD">—</span>'}}</td>
+    </tr>`;
+  }}).join('');
+  document.getElementById('comp2025-mensual-body').innerHTML = filasMes;
+}}
+
 // ── Helpers ────────────────────────────────────────────────────────────
 function fmt(n){{ return '$'+Math.round(n||0).toLocaleString('es-MX'); }}
 function fmtDec(n){{ return '$'+(n||0).toLocaleString('es-MX',{{minimumFractionDigits:2,maximumFractionDigits:2}}); }}
@@ -868,6 +1093,7 @@ window.addEventListener('DOMContentLoaded',()=>{{
   buildDiasRestTabs(); buildPeriodoBar('dias-periodo-bar', ()=>periodoDias, v=>{{periodoDias=v;}}, refrescarDias, 'dias-periodo-badge');
   buildDiasCharts(currentDiaRest, getMesesPeriodo(periodoDias)); fillTablaDias(currentDiaRest, getMesesPeriodo(periodoDias)); fillTablaDiasComp(currentDiaRest);
   renderDiasExtras(currentDiaRest, getMesesPeriodo(periodoDias));
+  refrescarComp2025();
 }});
 
 function showSection(id,btn){{
@@ -1246,11 +1472,14 @@ print("\n🔄 Iniciando proceso de actualización...")
 descargar_archivos()
 print("\n📊 Leyendo archivos Excel...")
 datos = extraer_datos()
+print("\n📊 Leyendo hojas históricas 2025...")
+datos_2025 = extraer_datos_2025()
 print("\n⚙️  Construyendo datos para el tablero...")
 meses, data = construir_js(datos)
+data_2025 = construir_js_2025(datos_2025)
 print(f"   Meses detectados: {', '.join(meses)}")
 print("\n🎨 Generando tablero HTML...")
-html = generar_html(meses, data, ULTIMA_ACTUALIZACION)
+html = generar_html(meses, data, ULTIMA_ACTUALIZACION, data_2025)
 salida = "index.html"
 with open(salida, "w", encoding="utf-8") as f:
     f.write(html)
