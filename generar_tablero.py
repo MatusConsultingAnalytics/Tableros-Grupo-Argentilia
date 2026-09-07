@@ -33,6 +33,7 @@ HOJAS = {
     "Argentilia Querétaro": "Argentilia Querétaro",
     "Frascati":             "Frascati",
     "Mikoh":                "Mikoh",
+    "Manolo":                "Manolo",
 }
 
 HOJAS_STAFF = {
@@ -40,13 +41,14 @@ HOJAS_STAFF = {
     "Argentilia Querétaro": "Argentilia Querétaro - Staff",
     "Frascati":             "Frascati - Staff",
     "Mikoh":                "Mikoh - Staff",
+    "Manolo":                "Manolo - Staff",
 }
 
 # ── Hojas históricas 2025 (mismo layout de columnas/filas que las hojas
 # 2026; una hoja por unidad, nombrada "2025 " + nombre exacto de la unidad) ──
 HOJAS_2025 = {nombre: f"2025 {sheet}" for nombre, sheet in HOJAS.items()}
 
-COMENSALES_SIMPLE = {"Argentilia León", "Mikoh"}
+COMENSALES_SIMPLE = {"Argentilia León", "Mikoh", "Manolo"}
 
 MESES_ORDEN = ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
                 "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"]
@@ -488,6 +490,7 @@ def generar_html(meses, data, ultima_actualizacion, data_2025=None):
     data_json  = json.dumps(data,  ensure_ascii=False)
     data_2025_json = json.dumps(data_2025 or {}, ensure_ascii=False)
     mes_actual_json = json.dumps(MESES_ES[HOY.month - 1], ensure_ascii=False)
+    dia_corte_json = json.dumps(FECHA_ESPERADA.day if FECHA_ESPERADA.month == HOY.month else 0)
 
     html = f"""<!DOCTYPE html>
 <html lang="es">
@@ -632,6 +635,7 @@ def generar_html(meses, data, ultima_actualizacion, data_2025=None):
     <button class="filter-btn" onclick="setCumpFilter('Argentilia Querétaro',this)">A. Querétaro</button>
     <button class="filter-btn" onclick="setCumpFilter('Frascati',this)">Frascati</button>
     <button class="filter-btn" onclick="setCumpFilter('Mikoh',this)">Mikoh</button>
+    <button class="filter-btn" onclick="setCumpFilter('Manolo',this)">Manolo</button>
   </div>
   <div class="chart-grid">
     <div class="chart-card full"><div class="chart-title">% Cumplimiento Presupuestal Mensual</div><div class="chart-wrap"><canvas id="chartCumplimiento"></canvas></div></div>
@@ -754,12 +758,12 @@ def generar_html(meses, data, ultima_actualizacion, data_2025=None):
       <div class="methodology-note">Cada renglón es una semana operativa (Lun–Dom) dentro del mes elegido — "Semana 1" de 2025 se compara contra "Semana 1" de 2026 por posición, no por fecha exacta (el mismo mes puede empezar en distinto día de la semana según el año). El Δ es la variación porcentual de 2026 vs. 2025.</div>
     </div>
     <div class="table-card">
-      <div class="table-title">Resultado de Mes Completo — vs. Objetivo 2026</div>
+      <div class="table-title" id="comp2025-mensual-title">Resultado de Mes Completo — vs. Objetivo 2026</div>
       <table>
-        <thead><tr><th>Métrica</th><th>2025</th><th>2026</th><th>Δ 2026 vs 2025</th><th>Objetivo/Meta 2026</th><th>Cumplimiento vs. Objetivo</th></tr></thead>
+        <thead><tr><th>Métrica</th><th>2025</th><th>2026</th><th>Δ 2026 vs 2025</th><th id="comp2025-th-objetivo">Objetivo/Meta 2026</th><th>Cumplimiento vs. Objetivo</th></tr></thead>
         <tbody id="comp2025-mensual-body"></tbody>
       </table>
-      <div class="methodology-note">El objetivo/meta 2026 de <strong>Venta Alimentos</strong> y <strong>Venta Bebidas</strong> se calcula como el 60% y 40% de la <strong>venta real total</strong> del mes (no del objetivo de venta), respectivamente — la hoja de captura solo define un objetivo de venta total, no por categoría. Junto al valor 2026 de esas dos filas se muestra entre paréntesis el <strong>% real</strong> que esa categoría representó sobre la venta total, como referencia para comparar contra el 60%/40% objetivo. <strong>Venta Total</strong>, <strong>Comensales</strong> y <strong>Ticket Promedio</strong> usan su objetivo/meta capturado directamente en la hoja.</div>
+      <div class="methodology-note" id="comp2025-mensual-note">El objetivo/meta 2026 de <strong>Venta Alimentos</strong> y <strong>Venta Bebidas</strong> se calcula como el 60% y 40% de la <strong>venta real total</strong> del mes (no del objetivo de venta), respectivamente — la hoja de captura solo define un objetivo de venta total, no por categoría. Junto al valor 2026 de esas dos filas se muestra entre paréntesis el <strong>% real</strong> que esa categoría representó sobre la venta total, como referencia para comparar contra el 60%/40% objetivo. <strong>Venta Total</strong>, <strong>Comensales</strong> y <strong>Ticket Promedio</strong> usan su objetivo/meta capturado directamente en la hoja.</div>
     </div>
   </div>
 </div>
@@ -769,10 +773,11 @@ def generar_html(meses, data, ultima_actualizacion, data_2025=None):
 <script>
 const MESES   = {meses_json};
 const MES_ACTUAL = {mes_actual_json};
+const DIA_CORTE = {dia_corte_json};
 const DATA    = {data_json};
 const DATA_2025 = {data_2025_json};
 const UNIDADES = Object.keys(DATA);
-const COLORES  = {{'Argentilia León':'#656266','Argentilia Querétaro':'#ED2E38','Frascati':'#B5B0AD','Mikoh':'#1A7A4A'}};
+const COLORES  = {{'Argentilia León':'#656266','Argentilia Querétaro':'#ED2E38','Frascati':'#B5B0AD','Mikoh':'#1A7A4A','Manolo':'#C99A2E'}};
 const DIAS_SEMANA = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
 
 let charts = {{}};
@@ -964,7 +969,7 @@ function resumenSemanaJS(bucket){{
   const comensales= bucket.reduce((s,d)=>s+(d.comensales||0),0);
   return {{alimentos,bebidas,total,comensales,ticket:comensales>0?total/comensales:null,fi:bucket[0].fecha,ff:bucket[bucket.length-1].fecha}};
 }}
-function mesesCerradosComp2025(){{ return MESES.filter(m=>m!==MES_ACTUAL); }}
+function mesesDisponiblesComp2025(){{ return MESES.slice(); }}
 function buildComp2025RestTabs(){{
   document.getElementById('comp2025-rest-tabs').innerHTML = UNIDADES.map((u,i)=>
     `<button class="rest-tab${{u===currentComp2025Unidad?' active':''}}" onclick="selectComp2025Unidad('${{u}}',this)">${{u.replace('Argentilia ','A. ')}}</button>`).join('');
@@ -977,12 +982,12 @@ function selectComp2025Unidad(u,btn){{
 }}
 function buildComp2025MesBar(){{
   const wrap = document.getElementById('comp2025-mes-bar');
-  const cerrados = mesesCerradosComp2025();
-  if(!currentComp2025Mes || !cerrados.includes(currentComp2025Mes)){{
-    currentComp2025Mes = cerrados.length ? cerrados[cerrados.length-1] : null;
+  const disponibles = mesesDisponiblesComp2025();
+  if(!currentComp2025Mes || !disponibles.includes(currentComp2025Mes)){{
+    currentComp2025Mes = disponibles.length ? disponibles[disponibles.length-1] : null;
   }}
-  wrap.innerHTML = '<span class="filter-label">Mes (a fecha vencida, mes completo):</span>' + cerrados.map(m=>
-    `<button class="filter-btn${{m===currentComp2025Mes?' active':''}}" onclick="selectComp2025Mes('${{m}}',this)">${{m}}</button>`).join('');
+  wrap.innerHTML = '<span class="filter-label">Mes:</span>' + disponibles.map(m=>
+    `<button class="filter-btn${{m===currentComp2025Mes?' active':''}}" onclick="selectComp2025Mes('${{m}}',this)">${{m}}${{m===MES_ACTUAL?' (en curso)':''}}</button>`).join('');
 }}
 function selectComp2025Mes(m,btn){{
   currentComp2025Mes = m;
@@ -1008,7 +1013,7 @@ function refrescarComp2025(){{
   buildComp2025RestTabs();
   buildComp2025MesBar();
   const u = currentComp2025Unidad, mes = currentComp2025Mes;
-  document.getElementById('comp2025-mes-badge').textContent = mes ? mes+' 2026 vs. '+mes+' 2025' : '—';
+  document.getElementById('comp2025-mes-badge').textContent = mes ? mes+' 2026'+(mes===MES_ACTUAL?' (en curso)':'')+' vs. '+mes+' 2025' : '—';
   const entry2025 = (DATA_2025[u]||{{}})[mes];
   const sinDatosEl = document.getElementById('comp2025-sin-datos');
   const contenidoEl = document.getElementById('comp2025-contenido');
@@ -1051,18 +1056,51 @@ function refrescarComp2025(){{
   }}
   document.getElementById('comp2025-semanal-body').innerHTML = filas;
 
-  // ── Resultado de mes completo vs. objetivo 2026 ──────────────────────
+  // ── Resultado de mes completo (o "a la fecha" si es el mes en curso) ──
+  const esMesActual = (mes === MES_ACTUAL);
   const idx = MESES.indexOf(mes);
-  const total26=DATA[u].total[idx]||0, presup26=DATA[u].presup[idx]||0;
-  const alim26=DATA[u].alimentos[idx]||0, beb26=DATA[u].bebidas[idx]||0;
+  let total26=DATA[u].total[idx]||0, presup26=DATA[u].presup[idx]||0;
+  let alim26=DATA[u].alimentos[idx]||0, beb26=DATA[u].bebidas[idx]||0;
   const cli26=DATA[u].clientes[idx]||0, cliMeta26=DATA[u].clientesMeta[idx]||0;
   const tk26=DATA[u].ticket[idx]||0, tkMeta26=DATA[u].ticketMeta[idx]||0;
+  let cmp2025 = entry2025; // valores base de comparación 2025 (por defecto: mes completo)
+  let objVentaTotal = presup26;
+
+  if(esMesActual){{
+    // Mes en curso: comparar 2026 (a la fecha) vs. 2025 recortado al mismo día del mes,
+    // no contra el mes 2025 completo — evita un Δ% engañoso por comparar parcial vs. completo.
+    const diasCorte = (entry2025.dias||[]).filter(d => {{
+      const diaNum = parseInt(d.fecha.slice(8,10), 10);
+      return diaNum <= DIA_CORTE;
+    }});
+    const sumaAli = diasCorte.reduce((s,d)=>s+(d.alimentos||0),0);
+    const sumaBeb = diasCorte.reduce((s,d)=>s+(d.bebidas||0),0);
+    const sumaTot = diasCorte.reduce((s,d)=>s+(d.total||0),0);
+    const sumaCli = diasCorte.reduce((s,d)=>s+(d.comensales||0),0);
+    cmp2025 = {{
+      alimentos: diasCorte.length ? sumaAli : null,
+      bebidas:   diasCorte.length ? sumaBeb : null,
+      total:     diasCorte.length ? sumaTot : null,
+      comensales: diasCorte.length ? sumaCli : null,
+      ticket:    (diasCorte.length && sumaCli>0) ? sumaTot/sumaCli : null,
+    }};
+    objVentaTotal = (DATA[u].presupParcial||[])[idx] || null;
+  }}
+
+  document.getElementById('comp2025-mensual-title').textContent = esMesActual
+    ? `Resultado a la Fecha — ${{mes}} (en curso, día ${{DIA_CORTE}})`
+    : 'Resultado de Mes Completo — vs. Objetivo 2026';
+  document.getElementById('comp2025-th-objetivo').textContent = esMesActual ? 'Objetivo 2026 (a la fecha)' : 'Objetivo/Meta 2026';
+  document.getElementById('comp2025-mensual-note').innerHTML = esMesActual
+    ? `<strong>${{mes}} está en curso.</strong> Para que la comparación sea justa, la columna 2025 no muestra el mes completo: se recortó al día ${{DIA_CORTE}} (mismo avance que 2026 a la fecha). El objetivo de <strong>Venta Total</strong> también es el objetivo <em>a la fecha</em> (prorrateado por semanas ya ejecutadas), no el presupuesto del mes completo. <strong>Comensales</strong> y <strong>Ticket Promedio</strong> muestran su meta mensual capturada tal cual (no se prorratea).`
+    : 'El objetivo/meta 2026 de <strong>Venta Alimentos</strong> y <strong>Venta Bebidas</strong> se calcula como el 60% y 40% de la <strong>venta real total</strong> del mes (no del objetivo de venta), respectivamente — la hoja de captura solo define un objetivo de venta total, no por categoría. Junto al valor 2026 de esas dos filas se muestra entre paréntesis el <strong>% real</strong> que esa categoría representó sobre la venta total, como referencia para comparar contra el 60%/40% objetivo. <strong>Venta Total</strong>, <strong>Comensales</strong> y <strong>Ticket Promedio</strong> usan su objetivo/meta capturado directamente en la hoja.';
+
   const filasMes = [
-    ['Venta Alimentos', entry2025.alimentos, alim26, total26>0 ? total26*0.60 : null, total26>0 ? (alim26/total26*100) : null],
-    ['Venta Bebidas',   entry2025.bebidas,   beb26,  total26>0 ? total26*0.40 : null, total26>0 ? (beb26/total26*100) : null],
-    ['Venta Total',     entry2025.total,     total26, presup26, null],
-    ['Comensales',      entry2025.comensales, cli26,  cliMeta26, null],
-    ['Ticket Promedio', entry2025.ticket,    tk26,   tkMeta26, null],
+    ['Venta Alimentos', cmp2025.alimentos, alim26, total26>0 ? total26*0.60 : null, total26>0 ? (alim26/total26*100) : null],
+    ['Venta Bebidas',   cmp2025.bebidas,   beb26,  total26>0 ? total26*0.40 : null, total26>0 ? (beb26/total26*100) : null],
+    ['Venta Total',     cmp2025.total,     total26, objVentaTotal, null],
+    ['Comensales',      cmp2025.comensales, cli26,  cliMeta26, null],
+    ['Ticket Promedio', cmp2025.ticket,    tk26,   tkMeta26, null],
   ].map(([label,v25,v26,obj,mixPct])=>{{
     const esMoneda = label!=='Comensales';
     const esTicket = label==='Ticket Promedio';
