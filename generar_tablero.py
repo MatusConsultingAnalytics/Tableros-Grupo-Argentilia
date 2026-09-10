@@ -612,7 +612,8 @@ def generar_html(meses, data, ultima_actualizacion, data_2025=None):
   </div>
   <div class="chart-grid">
     <div class="chart-card"><div class="chart-title">Participación en Venta del Grupo</div><div class="chart-wrap"><canvas id="chartParticipacion"></canvas></div></div>
-    <div class="chart-card"><div class="chart-title">Mikoh — Evolución Mensual</div><div class="chart-wrap"><canvas id="chartMikoh"></canvas></div></div>
+    <div class="chart-card"><div class="chart-title">Ticket Promedio — Evolución Mensual (5 unidades)</div><div class="chart-wrap"><canvas id="chartTicketTrend"></canvas></div></div>
+
   </div>
   <div class="table-card">
     <div class="table-title">Ranking por Volumen de Venta</div>
@@ -1124,7 +1125,7 @@ function fmtDec(n){{ return '$'+(n||0).toLocaleString('es-MX',{{minimumFractionD
 function pct(r,m){{ return m>0?((r-m)/m*100):null; }}
 
 window.addEventListener('DOMContentLoaded',()=>{{
-  buildKPIRanking(); buildTablaRanking(); buildComparativo(); buildParticipacion(); buildMikohTrend();
+  buildKPIRanking(); buildTablaRanking(); buildComparativo(); buildParticipacion(); buildTicketTrend();
   buildCumplimiento(); fillTablaCumplimiento('todas');
   buildRestTabs(); buildPeriodoBar('unidad-periodo-bar', ()=>periodoUnidad, v=>{{periodoUnidad=v;}}, refrescarUnidad, 'unidad-periodo-badge');
   buildDetalleUnidad(currentRest, getMesesPeriodo(periodoUnidad)); fillTablaSemana(currentRest, getMesesPeriodo(periodoUnidad));
@@ -1201,8 +1202,11 @@ function buildKPIRanking(){{
     const avg=t.length?t.reduce((a,b)=>a+b,0)/t.length:0;
     return avg<best.avg?{{u,avg}}:best;
   }},{{u:'',avg:99999}});
-  const mk=DATA['Mikoh']?.total;
-  const growth=mk&&mk.length>1?((mk[mk.length-1]-mk[0])/mk[0]*100).toFixed(1):0;
+  const maxTicket=UNIDADES.reduce((best,u)=>{{
+    const t=DATA[u].ticket.filter(x=>x>0);
+    const avg=t.length?t.reduce((a,b)=>a+b,0)/t.length:0;
+    return avg>best.avg?{{u,avg}}:best;
+  }},{{u:'',avg:-1}});
   const objetivo_grupo=UNIDADES.reduce((a,u)=>a+(DATA[u].presupParcial||[]).reduce((x,y)=>x+y,0),0);
   const pct_grupo=objetivo_grupo>0?(total_grupo/objetivo_grupo*100):null;
   const pctColor=pct_grupo===null?'inherit':pct_grupo>=100?'#1A7A4A':pct_grupo>=90?'#D4860A':'#ED2E38';
@@ -1212,7 +1216,7 @@ function buildKPIRanking(){{
     <div class="kpi-card ${{pct_grupo===null?'neutral':pct_grupo>=100?'positive':'negative'}}"><div class="kpi-label">% Cumplimiento Grupo</div><div class="kpi-value" style="color:${{pctColor}}">${{pct_grupo!==null?pct_grupo.toFixed(1)+'%':'—'}}</div><div class="kpi-sub">vs. objetivo a la fecha</div></div>
     <div class="kpi-card negative"><div class="kpi-label">#1 por Volumen</div><div class="kpi-value">${{UNIDADES[maxIdx].replace('Argentilia ','A. ')}}</div><div class="kpi-sub">${{fmt(totales[maxIdx])}}</div><div class="kpi-delta up">${{(totales[maxIdx]/total_grupo*100).toFixed(1)}}% del grupo</div></div>
     <div class="kpi-card neutral"><div class="kpi-label">Ticket más bajo</div><div class="kpi-value">${{minTicket.u.replace('Argentilia ','A. ')}}</div><div class="kpi-sub">Prom. $${{minTicket.avg.toFixed(0)}}</div></div>
-    <div class="kpi-card positive"><div class="kpi-label">Mayor Crecimiento</div><div class="kpi-value">Mikoh +${{growth}}%</div><div class="kpi-sub">Primer vs último mes</div></div>`;
+    <div class="kpi-card positive"><div class="kpi-label">Ticket Más Alto</div><div class="kpi-value">${{maxTicket.u.replace('Argentilia ','A. ')}}</div><div class="kpi-sub">Prom. $${{maxTicket.avg.toFixed(0)}}</div></div>`;
 }}
 function buildTablaRanking(){{
   const totales=UNIDADES.map(u=>DATA[u].total.reduce((a,b)=>a+b,0));
@@ -1245,10 +1249,9 @@ function buildParticipacion(){{
   const totals=UNIDADES.map(u=>DATA[u].total.reduce((a,b)=>a+b,0));
   charts.part=new Chart(document.getElementById('chartParticipacion').getContext('2d'),{{type:'doughnut',data:{{labels:UNIDADES.map(u=>u.replace('Argentilia ','A. ')),datasets:[{{data:totals,backgroundColor:UNIDADES.map(u=>COLORES[u]),borderWidth:2,borderColor:'#fff'}}]}},options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{position:'bottom',labels:{{font:{{size:11}}}}}}}}}}}});
 }}
-function buildMikohTrend(){{
-  if(charts.mikoh)charts.mikoh.destroy();
-  const d=DATA['Mikoh'];
-  charts.mikoh=new Chart(document.getElementById('chartMikoh').getContext('2d'),{{type:'line',data:{{labels:MESES,datasets:[{{label:'Total',data:d.total,borderColor:'#1A7A4A',backgroundColor:'rgba(26,122,74,0.1)',fill:true,tension:0.3,pointRadius:5}},{{label:'Alimentos',data:d.alimentos,borderColor:'#656266',borderDash:[4,4],fill:false,tension:0.3,pointRadius:3}},{{label:'Bebidas',data:d.bebidas,borderColor:'#ED2E38',borderDash:[4,4],fill:false,tension:0.3,pointRadius:3}}]}},options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{position:'bottom',labels:{{font:{{size:11}}}}}}}},scales:{{y:{{ticks:{{callback:v=>'$'+(v/1000000).toFixed(1)+'M',font:{{size:11}}}}}}}}}}}});
+function buildTicketTrend(){{
+  if(charts.ticketTrend)charts.ticketTrend.destroy();
+  charts.ticketTrend=new Chart(document.getElementById('chartTicketTrend').getContext('2d'),{{type:'line',data:{{labels:MESES,datasets:UNIDADES.map(u=>({{label:u.replace('Argentilia ','A. '),data:DATA[u].ticket.map(v=>v||null),borderColor:COLORES[u],backgroundColor:COLORES[u],fill:false,tension:0.3,pointRadius:4,spanGaps:true}}))}},options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{position:'bottom',labels:{{font:{{size:11}}}}}}}},scales:{{y:{{ticks:{{callback:v=>'$'+v,font:{{size:11}}}}}}}}}}}});
 }}
 
 // ── Cumplimiento ────────────────────────────────────────────────────────
@@ -1324,22 +1327,20 @@ function buildDetalleUnidad(u, mesesFiltro){{
     <div class="kpi-card neutral"><div class="kpi-label">Ticket Promedio</div><div class="kpi-value" style="color:${{tend_color}}">${{tend_ticket}}</div><div class="kpi-sub">Prom. $${{avg_ticket.toFixed(0)}}</div></div>
     <div class="kpi-card positive"><div class="kpi-label">Comensales</div><div class="kpi-value">${{clientes_total.toLocaleString('es-MX')}}</div><div class="kpi-sub">En el período</div></div>
   </div>`;
-  document.getElementById('detalle-unidad').innerHTML=kpis+renderStaff(u)+`<div class="chart-grid"><div class="chart-card full"><div class="chart-title">${{u}} · Alimentos y Bebidas vs Presupuesto</div><div class="chart-wrap"><canvas id="chartAB"></canvas></div></div></div>`;
+  document.getElementById('detalle-unidad').innerHTML=kpis+renderStaff(u)+`<div class="chart-grid"><div class="chart-card full"><div class="chart-title">${{u}} · Mezcla Alimentos / Bebidas (%) vs Presupuesto</div><div class="chart-wrap"><canvas id="chartAB"></canvas></div></div></div>`;
   if(charts.ab)charts.ab.destroy();
   setTimeout(()=>{{
     const labels=mesesFiltro;
-    const ali=idxList.map(i=>d.alimentos[i]||0);
-    const beb=idxList.map(i=>d.bebidas[i]||0);
     const pre=idxList.map(i=>d.presup[i]||null);
     const pctAli=idxList.map(i=>{{const t=(d.alimentos[i]||0)+(d.bebidas[i]||0); return t?+((d.alimentos[i]/t)*100).toFixed(1):null;}});
+    const pctBeb=pctAli.map(v=>v!==null?+(100-v).toFixed(1):null);
     charts.ab=new Chart(document.getElementById('chartAB').getContext('2d'),{{type:'bar',data:{{labels,datasets:[
-      {{label:'Alimentos',data:ali,backgroundColor:'#656266',stack:'a'}},
-      {{label:'Bebidas',data:beb,backgroundColor:'#ED2E38',stack:'a'}},
-      {{label:'Presupuesto',data:pre,backgroundColor:'rgba(0,0,0,0)',borderColor:'#B5B0AD',borderWidth:2,type:'line',pointRadius:4}},
-      {{label:'% Alimentos (mezcla)',data:pctAli,type:'line',yAxisID:'y1',borderColor:'#1A7A4A',backgroundColor:'#1A7A4A',borderDash:[3,3],tension:.25,pointRadius:3}}
+      {{label:'Alimentos %',data:pctAli,backgroundColor:'#656266',stack:'a',yAxisID:'y'}},
+      {{label:'Bebidas %',data:pctBeb,backgroundColor:'#ED2E38',stack:'a',yAxisID:'y'}},
+      {{label:'Presupuesto',data:pre,backgroundColor:'rgba(0,0,0,0)',borderColor:'#B5B0AD',borderWidth:2,type:'line',yAxisID:'y1',pointRadius:4}}
     ]}},options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{position:'bottom',labels:{{font:{{size:11}}}}}}}},scales:{{
-      y:{{stacked:true,ticks:{{callback:v=>'$'+(v/1000000).toFixed(1)+'M',font:{{size:11}}}}}},
-      y1:{{beginAtZero:true,max:100,position:'right',grid:{{drawOnChartArea:false}},ticks:{{callback:v=>v+'%',font:{{size:11}}}}}},
+      y:{{stacked:true,max:100,ticks:{{callback:v=>v+'%',font:{{size:11}}}}}},
+      y1:{{beginAtZero:true,position:'right',grid:{{drawOnChartArea:false}},ticks:{{callback:v=>'$'+(v/1000000).toFixed(1)+'M',font:{{size:11}}}}}},
       x:{{stacked:true}}}}}}}});
   }},50);
 }}
