@@ -5,27 +5,78 @@ on:
     - cron: '0 18 * * 1-5'
   workflow_dispatch:
 
+concurrency:
+  group: tablero
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v4
+      # Seguridad: nunca publicar el tablero sin contraseña
+      - name: Verificar secretos
+        env:
+          TABLERO_PASSWORD: ${{ secrets.TABLERO_PASSWORD }}
+          GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
+        run: |
+          if [ -z "$TABLERO_PASSWORD" ]; then
+            echo "::error::Falta el secreto TABLERO_PASSWORD. No se publica el tablero sin contraseña."
+            exit 1
+          fi
+          if [ -z "$GDRIVE_SA_KEY" ]; then
+            echo "::warning::Falta el secreto GDRIVE_SA_KEY: la pestaña Rentabilidad mostrará 'no disponible'."
+          fi
+
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Instalar dependencias
-        run: pip install pandas openpyxl gdown PyGithub
+        run: pip install pandas openpyxl requests google-auth
 
-      - name: Correr script
+      - name: Generar tablero
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
+          EF_FOLDER_ID: '1jDKGW4dhuy9JKvZ2g8Zuwx17qeE7kBcT'
         run: python3 generar_tablero.py
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Cifra el tablero: sin la contraseña el contenido es ilegible, incluso en el código fuente.
+      - name: Cifrar con contraseña
+        env:
+          TABLERO_PASSWORD: ${{ secrets.TABLERO_PASSWORD }}
+        run: |
+          npx --yes staticrypt@3.5.4 index.html \
+            -p "$TABLERO_PASSWORD" --short -d public \
+            -s 8b94054bfa6ae5578dd11ee9ffc0cb1f --config false --remember 7 \
+            --template-title "Tablero Ejecutivo · Grupo Gastronómico Argentilia" \
+            --template-instructions "Información confidencial de Matus Consulting. Ingresa la contraseña para ver el tablero." \
+            --template-placeholder "Contraseña" \
+            --template-button "Entrar" \
+            --template-remember "Recordarme en este equipo (7 días)" \
+            --template-error "Contraseña incorrecta" \
+            --template-toggle-show "Mostrar contraseña" \
+            --template-toggle-hide "Ocultar contraseña" \
+            --template-color-primary "#ED2E38" \
+            --template-color-secondary "#F4F2F0"
+          touch public/.nojekyll
+          if grep -q "Rentabilidad" public/index.html; then
+            echo "::error::El archivo publicado contiene texto sin cifrar. Se detiene la publicación."
+            exit 1
+          fi
+
+      # Solo se publica la carpeta cifrada; force_orphan borra el historial anterior sin cifrar.
       - name: Publicar tablero
-        uses: peaceiris/actions-gh-pages@v3
+        uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./
+          publish_dir: ./public
           publish_branch: gh-pages
+          force_orphan: true
