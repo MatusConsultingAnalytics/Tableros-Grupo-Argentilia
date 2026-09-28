@@ -13,6 +13,7 @@ except Exception:
     # México central no usa horario de verano desde 2022 → UTC-6 fijo.
     TZ_CDMX = timezone(timedelta(hours=-6))
 from io import BytesIO
+import rentabilidad
 
 _AHORA_CDMX = datetime.now(TZ_CDMX)
 ULTIMA_ACTUALIZACION = _AHORA_CDMX.strftime("%d/%m/%Y %I:%M %p") + " (Hora CDMX)"
@@ -60,14 +61,30 @@ DIAS_SEMANA = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domin
 _xlsx_bytes = None
 
 def descargar_archivos():
+    """Descarga la plantilla de captura diaria. Primero con la cuenta de
+    servicio (acceso privado); si no está configurada, con el enlace público."""
     global _xlsx_bytes
-    url = f"https://docs.google.com/spreadsheets/d/{SHEETS_ID}/export?format=xlsx"
-    print("⬇️  Descargando Google Sheets...")
-    r = requests.get(url, timeout=60)
-    if r.status_code != 200:
-        raise Exception(f"Error al descargar Sheets: HTTP {r.status_code}")
-    _xlsx_bytes = BytesIO(r.content)
-    print(f"✅ Descarga completa ({len(r.content)//1024} KB)")
+    local = os.environ.get("PLANTILLA_LOCAL")
+    if local:
+        _xlsx_bytes = BytesIO(open(local, "rb").read())
+        print(f"✅ Plantilla local: {local}")
+        return
+    print("⬇️  Descargando plantilla de captura...")
+    contenido = None
+    try:
+        contenido = rentabilidad.descargar_archivo_drive(SHEETS_ID)
+        if contenido:
+            print("   (con cuenta de servicio)")
+    except Exception as e:
+        print(f"   ⚠️  Cuenta de servicio sin acceso a la plantilla ({e}); se intenta el enlace público.")
+    if contenido is None:
+        url = f"https://docs.google.com/spreadsheets/d/{SHEETS_ID}/export?format=xlsx"
+        r = requests.get(url, timeout=60)
+        if r.status_code != 200:
+            raise Exception(f"Error al descargar Sheets: HTTP {r.status_code}")
+        contenido = r.content
+    _xlsx_bytes = BytesIO(contenido)
+    print(f"✅ Descarga completa ({len(contenido)//1024} KB)")
 
 def safe_float(v):
     try:
@@ -485,7 +502,7 @@ def construir_js(datos):
         }
     return meses_lista, data_js
 
-def generar_html(meses, data, ultima_actualizacion, data_2025=None):
+def generar_html(meses, data, ultima_actualizacion, data_2025=None, rt_html=""):
     meses_json = json.dumps(meses, ensure_ascii=False)
     data_json  = json.dumps(data,  ensure_ascii=False)
     data_2025_json = json.dumps(data_2025 or {}, ensure_ascii=False)
@@ -499,7 +516,8 @@ def generar_html(meses, data, ultima_actualizacion, data_2025=None):
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Tablero Ejecutivo — Grupo Gastronómico Argentilia</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<style>
+{rentabilidad.HEAD}
+<style>{rentabilidad.CSS}
   :root {{
     --red:#ED2E38;--gray-dark:#656266;--gray-mid:#B5B0AD;
     --gray-light:#F2F1F0;--white:#FFFFFF;--green:#1A7A4A;--amber:#D4860A;
@@ -599,6 +617,7 @@ def generar_html(meses, data, ultima_actualizacion, data_2025=None):
   <button class="nav-btn" onclick="showSection('mix',this)">Mix A&B · Ticket</button>
   <button class="nav-btn" onclick="showSection('dias',this)">Análisis por Día</button>
   <button class="nav-btn" onclick="showSection('comp2025',this)">2025 vs 2026</button>
+  <button class="nav-btn" onclick="showSection('rentabilidad',this)">Rentabilidad</button>
 </nav>
 <div class="content">
 
@@ -769,9 +788,12 @@ def generar_html(meses, data, ultima_actualizacion, data_2025=None):
   </div>
 </div>
 
+{rt_html}
+
 </div>
 
 <script>
+{rentabilidad.JS}
 const MESES   = {meses_json};
 const MES_ACTUAL = {mes_actual_json};
 const DIA_CORTE = {dia_corte_json};
@@ -1518,8 +1540,18 @@ print("\n⚙️  Construyendo datos para el tablero...")
 meses, data = construir_js(datos)
 data_2025 = construir_js_2025(datos_2025)
 print(f"   Meses detectados: {', '.join(meses)}")
+print("\n💼 Leyendo estados financieros (Rentabilidad)...")
+try:
+    financieros = rentabilidad.extraer_financieros()
+    if financieros.get("error"):
+        print(f"⚠️  {financieros['error']}")
+    rt_html = rentabilidad.generar_seccion(financieros, ULTIMA_ACTUALIZACION)
+except Exception as e:
+    import traceback; traceback.print_exc()
+    print(f"⚠️  No se pudo construir la pestaña Rentabilidad: {e}")
+    rt_html = rentabilidad.generar_seccion({"error": f"Error al procesar los estados financieros: {e}"})
 print("\n🎨 Generando tablero HTML...")
-html = generar_html(meses, data, ULTIMA_ACTUALIZACION, data_2025)
+html = generar_html(meses, data, ULTIMA_ACTUALIZACION, data_2025, rt_html)
 salida = "index.html"
 with open(salida, "w", encoding="utf-8") as f:
     f.write(html)
