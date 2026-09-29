@@ -910,11 +910,15 @@ def _tabla_unidades(mod, meses, ms, g, gc):
             c25 = _celda('<span class="rt-gr">n/d</span>', f'<span class="rt-gr">{nota_ap}</span>')
             cn_sub = k_sub = ch_sub = f'<span class="rt-gr">{nota_ap}</span>'
         cn_alto = m["cn"] is not None and g["cn"] and m["cn"] - g["cn"] > 0.05
+        u_val = fM(m["U"]) if m["U"] >= 0 else f'<span style="color:{ROJO};font-weight:600">{fM(m["U"])}</span>'
+        u_sub = (f'{delta(var(m["U"], m["Up"]) if m["Up"] > 0 else None, flecha=False)} <span class="rt-gr">vs ppto {fM(m["Up"])}</span>'
+                 if m["Up"] > 0 else f'<span class="rt-gr">ppto {fM(m["Up"])}</span>')
         cn_val = fP(m["cn"]) if not cn_alto else f'<span style="color:{ROJO};font-weight:600">{fP(m["cn"])}</span>'
         est_col = {"Sano": (VERDE, VERDE), "Vigilar": (AMBAR_OSC, AMBAR), "Crítico": (ROJO_OSC, ROJO)}[m["estado"]]
         filas.append(
             f'<tr class="{"rt-alt" if k % 2 else ""}"><td class="rt-un">{tit}</td>'
             f'<td class="rt-num">{fM(m["V"])}</td>{_celda(vp, vp_sub if m["Vp"] else None)}{c25}'
+            f'{_celda(u_val, u_sub)}'
             f'<td class="rt-num" style="font-weight:600;{"color:" + ROJO if (m["margen"] or 0) < 0 else ""}">{fP(m["margen"])}</td>'
             f'{_celda(cn_val, cn_sub)}'
             f'{_celda(fN(m["K"]), k_sub)}{_celda(fD(m["cheque"]), ch_sub)}'
@@ -926,6 +930,7 @@ def _tabla_unidades(mod, meses, ms, g, gc):
         + f'<td class="rt-num">{fM(g["V"])}</td>'
         + _celda(fM(g["Vp"]), delta((g["cumpl"] or 1) - 1, flecha=False) + " " + gr("real vs ppto"))
         + _celda(fM(gc["V25"]), delta(var(gc["V"], gc["V25"]), flecha=False) + " " + gr("comp."))
+        + _celda(fM(g["U"]), delta(var(g["U"], g["Up"]), flecha=False) + " " + gr(f"vs ppto {fM(g['Up'])}"))
         + f'<td class="rt-num">{fP(g["margen"])}</td>'
         + _celda(fP(g["cn"]), gr(f"vs {fP(gc['cn25'])} {anio - 1} comp."))
         + _celda(fN(g["K"]), delta(var(gc["K"], gc["K25"]), flecha=False) + " " + gr(f"vs {fN(gc['K25'])} comp."))
@@ -948,7 +953,7 @@ def _tabla_unidades(mod, meses, ms, g, gc):
              f"Estado: Sano = margen ≥ {MARGEN_SANO * 100:.0f}%; Crítico = margen < {MARGEN_CRITICO * 100:.0f}% "
              f"o venta a menos de 5% de su equilibrio; Vigilar = resto.")
     return (f'<div class="rt-tw"><table class="rt-t"><thead><tr><th style="text-align:left">Unidad</th><th>Ventas</th>'
-            f'<th>Presupuesto</th><th>{esc(col25)}</th><th>Margen</th><th>Costo + Nómina</th><th>Comensales</th>'
+            f'<th>Presupuesto</th><th>{esc(col25)}</th><th>Utilidad</th><th>Margen</th><th>Costo + Nómina</th><th>Comensales</th>'
             f'<th>Cheque promedio</th><th>Punto de equilibrio*</th><th style="text-align:left">Estado</th></tr></thead>'
             f'<tbody>{"".join(filas)}</tbody></table></div><div class="rt-note">{nota}</div>')
 
@@ -1150,9 +1155,9 @@ CSS = """
 #rentabilidad .rt-lt{font-size:16px;font-weight:600;color:#2C2C2C;margin-bottom:3px}
 #rentabilidad .rt-lb{font-size:14.5px;color:#656266;line-height:1.5}
 #rentabilidad .rt-tw{overflow-x:auto}
-#rentabilidad table.rt-t{width:100%;border-collapse:collapse;font-size:14px}
-#rentabilidad .rt-t th{background:#ED2E38;color:#fff;font-weight:600;padding:12px 12px;text-align:right;font-size:13px;letter-spacing:0;white-space:nowrap}
-#rentabilidad .rt-t td{padding:11px 12px;border-bottom:none;vertical-align:top}
+#rentabilidad table.rt-t{width:100%;border-collapse:collapse;font-size:13.5px}
+#rentabilidad .rt-t th{background:#ED2E38;color:#fff;font-weight:600;padding:12px 9px;text-align:right;font-size:13px;letter-spacing:0;white-space:nowrap}
+#rentabilidad .rt-t td{padding:11px 9px;border-bottom:none;vertical-align:top}
 #rentabilidad .rt-t tbody tr{background:#FDF0F0}
 #rentabilidad .rt-t tbody tr.rt-alt{background:#F5F5F5}
 #rentabilidad .rt-t tbody tr.rt-tot{background:#fff;border-top:2px solid #3F3C40;font-weight:700}
@@ -1160,7 +1165,7 @@ CSS = """
 #rentabilidad .rt-t td:nth-last-child(-n+2){white-space:nowrap}
 #rentabilidad .rt-un{font-weight:600;color:#3F3C40}
 #rentabilidad .rt-ap{font-weight:400;font-size:12.5px;color:#77727A}
-#rentabilidad .rt-sub2{font-size:12px;margin-top:2px;font-weight:400}
+#rentabilidad .rt-sub2{font-size:11.5px;margin-top:2px;font-weight:400}
 #rentabilidad .rt-gr{color:#77727A;font-weight:400}
 #rentabilidad .rt-est{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:600}
 #rentabilidad .rt-est i{width:10px;height:10px;border-radius:50%}
