@@ -14,6 +14,7 @@ except Exception:
     TZ_CDMX = timezone(timedelta(hours=-6))
 from io import BytesIO
 import rentabilidad
+import plan_recuperacion
 
 _AHORA_CDMX = datetime.now(TZ_CDMX)
 ULTIMA_ACTUALIZACION = _AHORA_CDMX.strftime("%d/%m/%Y %I:%M %p") + " (Hora CDMX)"
@@ -502,7 +503,7 @@ def construir_js(datos):
         }
     return meses_lista, data_js
 
-def generar_html(meses, data, ultima_actualizacion, data_2025=None, rt_html=""):
+def generar_html(meses, data, ultima_actualizacion, data_2025=None, rt_html="", plan_html=""):
     meses_json = json.dumps(meses, ensure_ascii=False)
     data_json  = json.dumps(data,  ensure_ascii=False)
     data_2025_json = json.dumps(data_2025 or {}, ensure_ascii=False)
@@ -618,6 +619,7 @@ def generar_html(meses, data, ultima_actualizacion, data_2025=None, rt_html=""):
   <button class="nav-btn" onclick="showSection('dias',this)">Análisis por Día</button>
   <button class="nav-btn" onclick="showSection('comp2025',this)">2025 vs 2026</button>
   <button class="nav-btn" onclick="showSection('rentabilidad',this)">Rentabilidad</button>
+  <button class="nav-btn" onclick="showSection('plan',this)">Plan de recuperación</button>
 </nav>
 <div class="content">
 
@@ -789,6 +791,7 @@ def generar_html(meses, data, ultima_actualizacion, data_2025=None, rt_html=""):
 </div>
 
 {rt_html}
+{plan_html}
 
 </div>
 
@@ -1550,8 +1553,16 @@ except Exception as e:
     import traceback; traceback.print_exc()
     print(f"⚠️  No se pudo construir la pestaña Rentabilidad: {e}")
     rt_html = rentabilidad.generar_seccion({"error": f"Error al procesar los estados financieros: {e}"})
+    financieros = {"error": f"Error al procesar los estados financieros: {e}"}
+print("\n🧭 Construyendo Plan de recuperación...")
+try:
+    plan_html = plan_recuperacion.generar_seccion(financieros)
+except Exception as e:
+    import traceback; traceback.print_exc()
+    print(f"⚠️  No se pudo construir la pestaña Plan de recuperación: {e}")
+    plan_html = plan_recuperacion.generar_seccion({"error": f"Error al construir el plan: {e}"})
 print("\n🎨 Generando tablero HTML...")
-html = generar_html(meses, data, ULTIMA_ACTUALIZACION, data_2025, rt_html)
+html = generar_html(meses, data, ULTIMA_ACTUALIZACION, data_2025, rt_html, plan_html)
 salida = "index.html"
 with open(salida, "w", encoding="utf-8") as f:
     f.write(html)

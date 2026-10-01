@@ -284,6 +284,27 @@ def extraer_financieros():
     if not unidades:
         return {"error": "No se pudo leer ningún estado de resultados. " + " | ".join(errores)}
     anio = max(e["anio"] for e in elegidos.values())
+
+    # Respaldo de presupuesto: si el archivo más reciente trae un mes sin presupuesto de venta
+    # (vacío, 0 o −1), se toma del archivo de cierre de ese mes cuando ahí sí es válido.
+    for unidad, datos in unidades.items():
+        for idx in range(datos["mes_cierre"]):
+            if datos["ppto"]["ventas"][idx] > 0:
+                continue
+            propio = next(((n, c) for n, _, c in archivos
+                           if interpretar_nombre(n) == (unidad, idx + 1, anio) and n != datos["archivo"]), None)
+            if not propio:
+                continue
+            try:
+                aux = leer_estado_resultados(propio[1](), anio, idx + 1, propio[0])
+            except Exception as ex:
+                print(f"⚠️  EF {unidad}: no se pudo leer {propio[0]} para respaldo de presupuesto ({ex})")
+                continue
+            if aux["ppto"]["ventas"][idx] > 0:
+                for campo in RENGLONES:
+                    datos["ppto"][campo][idx] = aux["ppto"][campo][idx]
+                datos.setdefault("ppto_respaldo", []).append((idx, propio[0]))
+                print(f"   · {unidad} {MESES_TIT[idx]}: presupuesto tomado de {propio[0]}")
     return {"anio": anio, "unidades": unidades, "errores": errores}
 
 
@@ -406,6 +427,15 @@ class Modelo:
                               f"(presupuesto de utilidad {fM(up)}). Ese mes se excluye del cumplimiento de ventas, "
                               f"pero su presupuesto de utilidad sí se suma al acumulado, tal como viene del archivo. "
                               f"Conviene confirmarlo con Contraloría.")
+            for idx, archivo in d.get("ppto_respaldo", []):
+                if idx < self.mes_grupo:
+                    avisos.append(f"{n}: el presupuesto de {MESES_TIT[idx]} se tomó de '{archivo}' porque el archivo "
+                                  f"más reciente no lo trae. Conviene que Contraloría lo corrija en su archivo maestro.")
+            for idx in range(self.mes_grupo):
+                pv, pu = d["ppto"]["ventas"][idx], d["ppto"]["utilidad"][idx]
+                if pv > 0 and pu < -0.2 * pv:
+                    avisos.append(f"{n}: el presupuesto de utilidad de {MESES_TIT[idx]} ({fM(pu)}) no es consistente con "
+                                  f"su presupuesto de venta ({fM(pv)}). Validar con Contraloría.")
         for e in self.errores:
             avisos.append(f"No se pudo leer: {e}")
         return avisos
