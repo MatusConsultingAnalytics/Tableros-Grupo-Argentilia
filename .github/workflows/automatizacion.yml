@@ -2,7 +2,9 @@ name: Actualizar Tablero
 
 on:
   schedule:
-    - cron: '0 18 * * 1-5'
+    # 19:47 UTC = 13:47 CDMX (respaldo; GitHub puede retrasar corridas programadas).
+    # El disparo principal de las 14:00 se hace por workflow_dispatch desde una tarea programada.
+    - cron: '47 19 * * 1-5'
   workflow_dispatch:
 
 concurrency:

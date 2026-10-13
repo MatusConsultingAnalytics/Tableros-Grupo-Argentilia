@@ -71,6 +71,10 @@ MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO",
          "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
 MESES_TIT = [m.capitalize() for m in MESES]
 MESES_ABR = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+# Nombres de mes aceptados en el NOMBRE del archivo (completo o abreviado): "SEP", "SEPT", "SETIEMBRE"...
+MES_ALIAS = {m: i + 1 for i, m in enumerate(MESES)}
+MES_ALIAS.update({a.upper(): i + 1 for i, a in enumerate(MESES_ABR)})
+MES_ALIAS.update({"SEPT": 9, "SETIEMBRE": 9, "SET": 9})
 
 # Renglones del estado de resultados (etiqueta normalizada, coincidencia por prefijo)
 RENGLONES = {
@@ -105,13 +109,15 @@ def _num(v):
 def interpretar_nombre(nombre):
     """'ARGENTILIA LEON AGOSTO 2026.xlsx' → ('Argentilia León', 8, 2026) o None."""
     base = _norm(re.sub(r"\.xlsx?$", "", nombre, flags=re.I))
-    m = re.match(r"^(?P<u>.+?) (?P<mes>" + "|".join(MESES) + r") (?P<anio>\d{4})$", base)
+    base = re.sub(r"[_\-.]+", " ", base).strip()
+    m = re.match(r"^(?P<u>.+?) (?P<mes>[A-Z]+) (?P<anio>\d{4})$", base)
     if not m:
         return None
+    mes = MES_ALIAS.get(m.group("mes"))
     unidad = UNIDADES_EF.get(m.group("u"))
-    if not unidad:
+    if not unidad or not mes:
         return None
-    return unidad, MESES.index(m.group("mes")) + 1, int(m.group("anio"))
+    return unidad, mes, int(m.group("anio"))
 
 
 def _drive_session():
