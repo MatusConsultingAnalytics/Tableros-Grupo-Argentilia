@@ -12,7 +12,37 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # El cron de respaldo puede llegar con horas de retraso (p. ej. 13/10 corrió a las 17:26 en vez de 13:47)
+  # y sobrescribir la actualización de las 14:00. Si ya hubo una actualización manual/programada exitosa hoy,
+  # la corrida de respaldo se omite; si no la hubo, se ejecuta normalmente.
+  verificar:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      ejecutar: ${{ steps.revisar.outputs.ejecutar }}
+    steps:
+      - id: revisar
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "ejecutar=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          HOY=$(TZ=America/Mexico_City date +%Y-%m-%d)
+          DESDE="${HOY}T06:00:00Z"   # 00:00 CDMX (UTC-6 fijo)
+          N=$(gh api -X GET "repos/${{ github.repository }}/actions/workflows/automatizacion.yml/runs" \
+                -f event=workflow_dispatch -f status=success -f created=">=$DESDE" --jq '.total_count')
+          if [ "${N:-0}" -gt 0 ]; then
+            echo "::notice::Ya hubo $N actualización(es) exitosa(s) hoy ($HOY). Se omite el respaldo programado."
+            echo "ejecutar=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ejecutar=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: verificar
+    if: needs.verificar.outputs.ejecutar == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
